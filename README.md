@@ -55,16 +55,28 @@ for epoch in range(SEARCH_EPOCHS):
     
     for each_new_skill in new_skills:
         skills.append(each_new_skill)
+        
         # TODO: evaluate your skill's score
         scores.append(evaluate_your_score(each_new_skill))
         
     norm_scores = min_max_normalization(scores)
-    
+
+
+# print final search results
 top_10_skills, _scores = get_top_n(
                                 N=10,
                                 skills=skills,
                                 scores=scores)
                         
+
 for index, (skill, score) in enumerate(zip(top_10_skills, _scores)):
     print('Top {} skill: {}, score: {}'.format(index+1, skill, score))
+
+
+# save model
+epd_model.save('my_epd_model.model')
+
+# load model
+epd_model = epd.load('my_epd_model.model')
+
 ```
