@@ -11,7 +11,6 @@ from decoder import decoder
 
 from . import tf_util
 
-
 class BaseModel:
     def __init__(self,
                 encoder_num_layers = 1,
@@ -114,7 +113,11 @@ class BaseModel:
         self.decoder_ph = None
         self.target_ph = None
 
+        # private
+        self._param_load_ops = None
 
+
+        self.LOG = logging.getLogger()
 
         if _init_setup_model:
             self._setup_model()
@@ -132,7 +135,7 @@ class BaseModel:
         model.__dict__.update(data)
         model._setup_model()
         
-        model._load_parameters(params) #TODO
+        model._load_parameters(params)
         
         return model
 
@@ -175,7 +178,7 @@ class BaseModel:
         
         data = self._build_param_dict()
 
-        params = self._get_parameters() #TODO
+        params = self._get_parameters()
         
         self._save_model(save_path, data, params)
 
@@ -260,7 +263,10 @@ class BaseModel:
 
 
 
-    def _train_step(self)
+    def _train_step(self):
+
+
+
 
     @staticmethod
     def _save_model(save_path, data, params=None):
@@ -293,11 +299,59 @@ class BaseModel:
             
         return data, params
     
-    
-    def _load_parameters(self, params):
-        # TODO
-    
-    def _get_parameters(self):
-        # TODO
+    def _setup_load_operations(self):
+        
+        if self._param_load_ops is not None:
+            raise RuntimeError("Parameter load operations have already been created")
 
+        loadable_parameters = self._get_parameter_list()
+    
+        self._param_load_ops = OrderedDict()
+        with self.graph.as_default():
+            for param in loadable_parameters:
+                placeholder = tf.placeholder(dtype=param.dtype, shape=param.shape)
+                self._param_load_ops[param.name] = (placeholder, param.assign(placeholder))
+
+    def _load_parameters(self, load_dict):
+        
+        if self._param_load_ops is None:
+            self._setup_load_operations()
+
+        params = None
+        if isinstance(load_dict, dict):
+            params = load_dict
+        else:
+            raise ValueError("Unknown type of load_dict, the load_doct mustbe dict type")
+
+        feed_dict = {}
+        param_update_ops = []
+        not_updated_variables = set(self._param_load_ops.keys())
+        
+        for param_name, param_value in params.items():
+            placeholder, assign_op = self._param_load_ops[param_name]
+            feed_dict[placeholder] = param_value
+
+            param_update_ops.append(assign_op)
+
+            not_updated_variables.remove(param_name)
+
+            self.LOG.info('variable: {} loaded'.format(param_name))
+
+        if len(not_updated_variables) > 0:
+            for var in not_updated_variables:
+                self.LOG.warning('missing variable: {}'.format(var))
+
+        self.sess.run(param_update_ops, feed_dict=feed_dict)
+
+    
+    def _get_parameter_list(self):
+        return self.parameters
+
+    def _get_parameters(self):
+        parameters = self._get_parameter_list()
+        parameter_values = self.sess.run(parameters)
+
+        return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
+
+        return return_dictionary
 
