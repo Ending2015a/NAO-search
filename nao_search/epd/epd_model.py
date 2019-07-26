@@ -3,13 +3,16 @@ import sys
 import time
 import logging
 
+import numpy as np
 import tensorflow as tf
 
 from encoder import encoder
 from decoder import decoder
 
+from collections import OrderedDict
 
 from . import tf_util
+from .tf_util import TensorboardWriter
 
 class BaseModel:
     def __init__(self,
@@ -123,7 +126,8 @@ class BaseModel:
             self._setup_model()
 
 
-    def fit(self, skills, scores):
+    def learn(self, skills, scores, epochs=10, callback=None, log_interval=1, tb_log_name="epd", reset_num_timesteps=True):
+
 
     def predict(self, seeds, lambdas=[10, 20, 30]):
 
