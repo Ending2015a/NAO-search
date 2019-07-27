@@ -9,6 +9,7 @@ import tensorflow as tf
 from encoder import encoder
 from decoder import decoder
 
+from copy import deepcopy
 from collections import OrderedDict
 
 from . import tf_util
@@ -125,8 +126,57 @@ class BaseModel:
         if _init_setup_model:
             self._setup_model()
 
+    def _data_preprocess(self, X, y):
 
-    def learn(self, skills, scores, epochs=10, callback=None, log_interval=1, tb_log_name="epd", reset_num_timesteps=True):
+    def _data_postprocess(self, X, y):
+
+
+    def learn(self, X, y, epochs=10, callback=None, log_interval=1, tb_log_name="epd", reset_num_timesteps=True):
+        X_bak = np.array(X, copy=True, dtype=np.int32)
+        y_bak = np.array(y, copy=True, dtype=np.float32)
+
+        assert np.all(X_bak >= 0 and X_bak < encoder_vocab_size), ValueError("Each element of input 'X' must be in the range of the vocab size")
+        assert np.all(y_bak >= 0.0 and y_bak <= 1.0), ValueError("Each element of input 'y' must be normalized between 0 ~ 1")
+        assert len(X_bak) == len(y_bak), ValueError("The size of input 'X' and 'y' must be equal")
+        assert len(X_bak) > 10, "The number of training samples 'X' must be greater than 10"
+
+        new_tb_log = self._initialize_global_step(reset_num_timesteps)
+
+        with TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) as writer:
+
+            # calculate the total number of items
+            num_items = len(y_bak)
+
+            # shuffled indices
+            index_shuffle = [idx for idx in range(len(num_items))]
+            np.random.shuffle(index_shuffle)
+
+            # shuffled samples
+            X_shuffle = X_bak[index_shuffle]
+            y_shuffle = y_bak[index_shuffle]
+
+            # calculate training data size
+            train_num = int(num_items * 0.7)
+            eval_num = num_items - train_num
+
+            # create dataset
+            X_train = X_shuffle[:train_num]
+            y_train = y_shuffle[:train_num]
+
+            X_eval = X_shuffle[train_num:]
+            y_eval = y_shuffle[train_num:]
+
+            # total training steps of each epoch
+            n_updates = train_num // self.batch_size
+
+            t_first_start = time.time()
+
+            for update in range(1, n_updates+1):
+
+                t_start = time.time()
+                
+
+
 
 
     def predict(self, seeds, lambdas=[10, 20, 30]):
@@ -205,43 +255,88 @@ class BaseModel:
             # placeholder
             self.encoder_ph = tf.placeholder(shape=(None, self.source_length), tf.int32)
             self.decoder_ph = tf.placeholder(shape=(None, self.source_length), tf.int32)
+            self.decoder_input_ph = tf.placeholder(shape=(None, self.source_length), tf.int32)
+
             self.target_ph = tf.placeholder(shape=(None, ), tf.float32)
 
 
             with tf.variable_scope('model'):
             
+                # === train ===
                 # encoder
-                self.my_encoder = encoder.Model(self.encoder_ph, self.target_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Encoder', reuse=False)
+                self.train_encoder = encoder.Model(self.encoder_ph, self.target_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Encoder', reuse=False)
 
-                encoder_outputs = self.my_encoder.encoder_outputs
-                encoder_state = self.my_encoder.arch_emb
+                encoder_outputs = train_encoder.encoder_outputs
+                encoder_state = train_encoder.arch_emb
                 encoder_state.set_shape([None, self.decoder_hidden_size])
                 encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
                 encoder_state = (encoder_state,) * self.decoder_num_layers
 
-                decoder_input_pad = tf.pad(self.decoder_ph, [[0, 0], [1, 0]], "CONSTANT", constant_values=0)
-                self.decoder_input = tf.slice(decoder_input_pad, [0, 0], [None, -1])
+                #decoder_input_pad = tf.pad(self.decoder_ph, [[0, 0], [1, 0]], "CONSTANT", constant_values=0)
+                #decoder_input = tf.slice(decoder_input_pad, [0, 0], [None, -1])
 
-                #decoder
-                self.my_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input, self.decoder_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Decoder')
+                # decoder
+                self.train_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input_ph, self.decoder_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Decoder')
 
                 # get loss
-                self.encoder_loss = self.my_encoder.loss
-                self.decoder_loss = self.my_decoder.loss
+                encoder_loss = self.train_encoder.loss
+                decoder_loss = self.train_decoder.loss
+
+                # set reuse variables
+                tf.get_variable_scope().reuse_variables()
+
+                # === predict ===
+
+                # encode old arch
+                self.eval_encoder = encoder.Model(self.encoder_ph, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Encoder', reuse=True)
+                encoder_outputs = self.eval_encoder.encoder_outputs
+                encoder_state = self.eval_encoder.arch_emb
+                encoder_state.set_shape([None, self.decoder_hidden_size])
+                encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
+                encoder_state = (encoder_state,) * self.decoder_num_layers
+
+                self.eval_decoder = decoder.Model(encoder_outputs, encoder_state, None, None, pself.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Decoder')
+                
+                # predict new arch embedding
+                res = self.eval_encoder.infer()
+                predict_value = res['predict_value']
+                arch_emb = res['arch_emb']
+                new_arch_emb = res['new_arch_emb']
+                new_arch_outputs = res['new_arch_outputs']
+
+                # decode old arch (evaluate)
+                res = self.eval_decoder.decode()
+                sample_id = res['sample_id']
+
+                encoder_state = new_arch_emb
+                encoder_state.set_shape([None, self.decoder_hidden_size])
+                encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
+                encoder_state = (encoder_state,) * self.decoder_num_layers
+
+                # decode new arch
+                self.pred_decoder = decoder.Model(new_arch_outputs, encoder_state, None, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, 'Decoder')
+                res = my_decoder.decode()
+                new_sample_id = res['sample_id']
+
 
             # compute loss
             with tf.variable_scope('loss'):
-                self.decay_loss = self.weight_decay * tf.add_n( [tf.nn.l2_loss(v) for v in tf.trainable_variables()] )
-                self.total_loss = self.trade_off * self.encoder_loss + (1 - self.trade_off) * decoder_loss + decay_loss
+                encoder_loss = tf.identity(encoder_loss, 'encoder_loss')
+                decoder_loss = tf.identity(decoder_loss, 'decoder_loss')
+                decay_loss = self.weight_decay * tf.add_n( [tf.nn.l2_loss(v) for v in tf.trainable_variables()] )
+                total_loss = self.trade_off * encoder_loss + (1. - self.trade_off) * decoder_loss + decay_loss
 
-                tf.summary.scalar('encoder_loss', self.encoder_loss)
-                tf.summary.scalar('decoder_loss', self.decoder_loss)
-                tf.summary.scalar('decay_loss', self.decay_loss)
-                tf.summary.scalar('total_loss', self.total_loss)
+                tf.summary.scalar('encoder_loss', encoder_loss)
+                tf.summary.scalar('decoder_loss', decoder_loss)
+                tf.summary.scalar('decay_loss', decay_loss)
+                tf.summary.scalar('total_loss', total_loss)
 
+            # global step
             global_step = tf.train.get_or_create_global_step()
+            # learning rate
             learning_rate = tf.constant(self.learning_rate)
 
+            # optimizer
             opt = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=1e-5)
 
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -250,7 +345,7 @@ class BaseModel:
                 clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.max_gradient_norm)
 
                 # training operations
-                self.train_op = opt.apply_gradients(
+                train_op = opt.apply_gradients(
                         zip(clipped_gradients, variables), global_step=global_step)
 
             # summary
@@ -261,16 +356,47 @@ class BaseModel:
                         tf.summary.histogram(var.name, var)
 
 
-            learning_rate = tf.identity(learning_rate, 'learning_rate')
-            tf.summary.scalar('learning_rate', learning_rate)
+            with tf.variable_scope('info'):
+                learning_rate = tf.identity(opt._lr, 'learning_rate')
+                tf.summary.scalar('learning_rate', learning_rate)
 
+            
+            self.encoder_loss = encoder_loss
+            self.decoder_loss = decoder_loss
+            self.decay_loss = decay_loss
+            self.total_loss = total_loss
+            self.global_step = global_step
+            self.lr = learning_rate
 
+            # training op
+            self.train_op = train_op
+
+            # prediction op
+            self.predict_ops = {
+                    'arch': decoder_target,
+                    'ground_truth_value': encoder_target, # ground truth score
+                    'predict_value': predict_value,       # predicted score
+                    'sample_id': sample_id,               # old arch (evaluate)
+                    'new_sample_id': new_sample_id        # new arch
+                }
+
+            tf.global_variables_initializer().run(session=self.sess)
+
+            # summary op
+            self.summary_op = tf.summary.merge_all()
 
 
     def _train_step(self):
+        pass
 
+    def _initialize_global_step(reset_num_timesteps):
 
+        if reset_num_timesteps:
+            self.sess.run(
+                    [self.global_step.assign(0)]
+                    )
 
+        return self.sess.run( [self.global_step] ) == 0
 
     @staticmethod
     def _save_model(save_path, data, params=None):
