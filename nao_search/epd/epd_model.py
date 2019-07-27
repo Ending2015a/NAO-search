@@ -17,37 +17,37 @@ from .tf_util import TensorboardWriter
 
 class BaseModel:
     def __init__(self,
-                encoder_num_layers = 1,
-                encoder_hidden_size = 96,
-                encoder_emb_size = 32,
-                mlp_num_layers = 0,
-                mlp_hidden_size = 32,
-                mlp_dropout = 0.5,
-                decoder_num_layers = 1,
-                decoder_hidden_size = 32,
-                source_length = 60,       # input source length
-                encoder_length = 60,      # encoder length, the input source will be reshaped to match this encoder length: (batch_size, encoder_length, source_length// encoder_length)
-                decoder_length = 60,      # decoder length
-                encoder_dropout = 0.0,
-                decoder_dropout = 0.0,
-                weight_decay = 1e-4,
-                encoder_vocab_size = 21,
-                decoder_vocab_size = 21,
-                trade_off = 0.5,
-                batch_size = 128,
-                learning_rate = 1.0,
-                optimizer = 'adam',
-                start_decay_step = 100,
-                decay_steps = 1000,
-                decay_factor = 0.9,
-                attention = False,
-                max_gradient_norm = 5.0,
-                beam_width = 0,
-                time_major = False,
+                encoder_num_layers:  int = 1,
+                encoder_hidden_size: int = 96,
+                encoder_emb_size:    int = 32,
+                mlp_num_layers:      int = 0,
+                mlp_hidden_size:     int = 100,
+                mlp_dropout:       float = 0.5,
+                decoder_num_layers:  int = 1,
+                decoder_hidden_size: int = 96,
+                source_length:       int = 60,
+                encoder_length:      int = 20,
+                decoder_length:      int = 60,
+                encoder_dropout:   float = 0.1,
+                decoder_dropout:   float = 0.0,
+                weight_decay:      float = 1e-4,
+                encoder_vocab_size:  int = 21,
+                decoder_vocab_size:  int = 21,
+                trade_off:         float = 0.8,
+                batch_size:          int = 128,
+                learning_rate:     float = 0.001,
+                optimizer:           str = 'adam',  # DO NOT CHANGE
+                start_decay_step:    int = 100,     # X
+                decay_steps:         int = 1000,    # X
+                decay_factor:      float = 0.9,     # X
+                attention:          bool = True,    # DO NOT CHANGE
+                max_gradient_norm: float = 5.0,
+                beam_width:          int = 0,
+                time_major:         bool = True,    # DO NOT CHANGE
 
-                num_cpu = 0,
-                full_tensorboard_log = False,
-                _init_setup_model=False):
+                num_cpu:               int = 0,
+                full_tensorboard_log: bool = False,
+                _init_setup_model:    bool = False): # DO NOT CHANGE
 
         '''
         :param encoder_num_layers: (int) The number of hidden layers of the encoder
@@ -59,27 +59,31 @@ class BaseModel:
         :param decoder_num_layers:
         :param decoder_hidden_size:
         :param source_length: (int) The input sequence length
-        :param encoder_length: (int) The encoder length. The input source will be folded to match this encoder length.
-        :param decoder_length: (int)
+        :param encoder_length: (int) The encoder input length. The source sequence will be folded to match this encoder length. (batch_size, encoder_length, source_length//encoder_length)
+        :param decoder_length: (int) The decoder output length.
         :param encoder_dropout:
         :param decoder_dropout:
         :param weight_decay:
         :param encoder_vocab_size:
         :param decoder_vocab_size:
-        :param trade_off:
+        :param trade_off: (float) An alpha value that trade off the portion between the encoder loss and decoder loss. total_loss = trade_off * encoder_loss + (1.0-trade_off) * decoder_loss
         :param batch_size:
         :param learning_rate:
-        :param optimizer: (str)
-        :param start_decay_step:
-        :param decay_steps:
-        :param decay_factor:
+        :param optimizer: (str) ONLY 'adam' IS AVAILABLE.
+        :param start_decay_step: (int) The starting step to decay the learning rate. (for 'sgd' optimizer)
+        :param decay_steps: (int) The decay steps of the learning rate. (for 'sgd' optimizer)
+        :param decay_factor: (float) The decay factor of the learning rate. (for 'sgd' optimizer)
         :param attention:
         :param max_gradient_norm:
         :param beam_width:
         :param time_major:
         :param num_cpu:
+        :param full_tensorboard_log: (bool)
         '''
     
+
+        # === hyperparameters ===
+
         self.encoder_num_layers = encoder_num_layers
         self.encoder_hidden_size = encoder_hidden_size 
         self.encoder_emb_size = encoder_emb_size
@@ -108,6 +112,7 @@ class BaseModel:
         self.beam_width = beam_width
         self.time_major = time_major
 
+        # === misc ===
 
         self.num_cpu = num_cpu
         self.full_tensorboard_log = full_tensorboard_log
@@ -115,9 +120,10 @@ class BaseModel:
         self.sess = None
         self.encoder_ph = None
         self.decoder_ph = None
+        self.decoder_intput_ph = None
         self.target_ph = None
 
-        # private
+        # === private ===
         self._param_load_ops = None
 
 
@@ -125,73 +131,6 @@ class BaseModel:
 
         if _init_setup_model:
             self._setup_model()
-
-    def _data_preprocess(self, X, y):
-
-    def _data_postprocess(self, X, y):
-
-
-    def learn(self, X, y, epochs=10, callback=None, log_interval=1, tb_log_name="epd", reset_num_timesteps=True):
-        X_bak = np.array(X, copy=True, dtype=np.int32)
-        y_bak = np.array(y, copy=True, dtype=np.float32)
-
-        assert np.all(X_bak >= 0 and X_bak < encoder_vocab_size), ValueError("Each element of input 'X' must be in the range of the vocab size")
-        assert np.all(y_bak >= 0.0 and y_bak <= 1.0), ValueError("Each element of input 'y' must be normalized between 0 ~ 1")
-        assert len(X_bak) == len(y_bak), ValueError("The size of input 'X' and 'y' must be equal")
-        assert len(X_bak) > 10, "The number of training samples 'X' must be greater than 10"
-
-        new_tb_log = self._initialize_global_step(reset_num_timesteps)
-
-        with TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) as writer:
-
-            # calculate the total number of items
-            num_items = len(y_bak)
-
-            # shuffled indices
-            index_shuffle = [idx for idx in range(len(num_items))]
-            np.random.shuffle(index_shuffle)
-
-            # shuffled samples
-            X_shuffle = X_bak[index_shuffle]
-            y_shuffle = y_bak[index_shuffle]
-
-            # calculate training data size
-            train_num = int(num_items * 0.7)
-            eval_num = num_items - train_num
-
-            # create dataset
-            X_train = X_shuffle[:train_num]
-            y_train = y_shuffle[:train_num]
-
-            X_eval = X_shuffle[train_num:]
-            y_eval = y_shuffle[train_num:]
-
-            # total training steps of each epoch
-            n_updates = train_num // self.batch_size
-
-            t_first_start = time.time()
-
-            for update in range(1, n_updates+1):
-
-                t_start = time.time()
-                
-
-
-
-
-    def predict(self, seeds, lambdas=[10, 20, 30]):
-
-    @classmethod
-    def load(cls, load_path):
-        data, params = cls._load_model(load_path)
-        
-        model = cls(_init_setup_model=False)
-        model.__dict__.update(data)
-        model._setup_model()
-        
-        model._load_parameters(params)
-        
-        return model
 
 
     def _build_param_dict(self):
@@ -228,15 +167,7 @@ class BaseModel:
         
         return data
 
-    def save(self, save_path):
-        
-        data = self._build_param_dict()
 
-        params = self._get_parameters()
-        
-        self._save_model(save_path, data, params)
-
-        
     def _setup_model(self):
 
         self.params = self._build_param_dict()
@@ -261,16 +192,27 @@ class BaseModel:
 
 
             with tf.variable_scope('model'):
+
+                def _build_encoder_state(encoder):
+                    encoder_outputs = encoder.encoder_outputs
+                    encoder_state = encoder.arch_emb
+                    encoder_state.set_shape([None, self.decoder_hidden_size])
+                    encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
+                    encoder_state = (encoder_state,) * self.decoder_num_layers
+
+                    return encoder_outputs, encoder_state
             
                 # === train ===
                 # encoder
                 self.train_encoder = encoder.Model(self.encoder_ph, self.target_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Encoder', reuse=False)
 
-                encoder_outputs = train_encoder.encoder_outputs
-                encoder_state = train_encoder.arch_emb
-                encoder_state.set_shape([None, self.decoder_hidden_size])
-                encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
-                encoder_state = (encoder_state,) * self.decoder_num_layers
+                encoder_outputs, encoder_state = _build_encoder_state(self.train_encoder)
+
+                #encoder_outputs = train_encoder.encoder_outputs
+                #encoder_state = train_encoder.arch_emb
+                #encoder_state.set_shape([None, self.decoder_hidden_size])
+                #encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
+                #encoder_state = (encoder_state,) * self.decoder_num_layers
 
                 #decoder_input_pad = tf.pad(self.decoder_ph, [[0, 0], [1, 0]], "CONSTANT", constant_values=0)
                 #decoder_input = tf.slice(decoder_input_pad, [0, 0], [None, -1])
@@ -279,33 +221,51 @@ class BaseModel:
                 self.train_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input_ph, self.decoder_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Decoder')
 
                 # get loss
-                encoder_loss = self.train_encoder.loss
-                decoder_loss = self.train_decoder.loss
+                train_encoder_loss = self.train_encoder.loss
+                train_decoder_loss = self.train_decoder.loss
 
                 # set reuse variables
                 tf.get_variable_scope().reuse_variables()
 
+
+                # === eval ===
+                
+                # encoder
+                self.eval_encoder = encoder.Model(self.encoder_ph, self.target_ph, self.params, mode=tf.estimator.ModeKeys.EVAL, scope='Encoder', reuse=True)
+                
+                encoder_outputs, encoder_state = _build_encoder_state(self.eval_encoder)
+
+                # decoder
+                self.eval_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_intput_ph, self.decoder_ph, self.params,mode=tf.estimator.ModeKeys.EVAL, scope='Decoder')
+
+                eval_encoder_loss = self.eval_encoder.loss
+                eval_decoder_loss = self.eval_decoder.loss
+
                 # === predict ===
 
+                # encoder
+                self.pred_encoder = encoder.Model(self.encoder_ph, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Encoder', reuse=True)
+                
                 # encode old arch
-                self.eval_encoder = encoder.Model(self.encoder_ph, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Encoder', reuse=True)
-                encoder_outputs = self.eval_encoder.encoder_outputs
-                encoder_state = self.eval_encoder.arch_emb
-                encoder_state.set_shape([None, self.decoder_hidden_size])
-                encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
-                encoder_state = (encoder_state,) * self.decoder_num_layers
+                encoder_outputs, encoder_state = _build_encoder_state(self.pred_encoder)
+                #encoder_outputs = self.eval_encoder.encoder_outputs
+                #encoder_state = self.eval_encoder.arch_emb
+                #encoder_state.set_shape([None, self.decoder_hidden_size])
+                #encoder_state = tf.contrib.rnn.LSTMStateTuple(encoder_state, encoder_state)
+                #encoder_state = (encoder_state,) * self.decoder_num_layers
 
-                self.eval_decoder = decoder.Model(encoder_outputs, encoder_state, None, None, pself.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Decoder')
+                # tmp decoder
+                tmp_decoder = decoder.Model(encoder_outputs, encoder_state, None, None, pself.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Decoder')
                 
                 # predict new arch embedding
-                res = self.eval_encoder.infer()
+                res = self.pred_encoder.infer()
                 predict_value = res['predict_value']
                 arch_emb = res['arch_emb']
                 new_arch_emb = res['new_arch_emb']
                 new_arch_outputs = res['new_arch_outputs']
 
                 # decode old arch (evaluate)
-                res = self.eval_decoder.decode()
+                res = tmp_decoder.decode()
                 sample_id = res['sample_id']
 
                 encoder_state = new_arch_emb
@@ -319,17 +279,42 @@ class BaseModel:
                 new_sample_id = res['sample_id']
 
 
-            # compute loss
-            with tf.variable_scope('loss'):
-                encoder_loss = tf.identity(encoder_loss, 'encoder_loss')
-                decoder_loss = tf.identity(decoder_loss, 'decoder_loss')
+            # compute training loss
+            with tf.variable_scope('train_loss'):
+                encoder_loss = tf.identity(train_encoder_loss, 'encoder_loss')
+                decoder_loss = tf.identity(train_decoder_loss, 'decoder_loss')
                 decay_loss = self.weight_decay * tf.add_n( [tf.nn.l2_loss(v) for v in tf.trainable_variables()] )
-                total_loss = self.trade_off * encoder_loss + (1. - self.trade_off) * decoder_loss + decay_loss
+                model_loss = self.trade_off * encoder_loss + (1. - self.trade_off) * decoder_loss
+                total_loss = model_loss + decay_loss
 
                 tf.summary.scalar('encoder_loss', encoder_loss)
                 tf.summary.scalar('decoder_loss', decoder_loss)
                 tf.summary.scalar('decay_loss', decay_loss)
+                tf.summary.scalar('model_loss', model_loss)
                 tf.summary.scalar('total_loss', total_loss)
+
+                train_decay_loss = decay_loss
+                train_model_loss = model_loss
+                train_total_loss = total_loss
+
+
+            # compute eval loss
+            with tf.variable_scope('eval_loss'):
+                encoder_loss = tf.identity(eval_encoder_loss, 'encoder_loss')
+                decoder_loss = tf.identity(eval_decoder_loss, 'decoder_loss')
+                decay_loss = self.weight_decay * tf.add_n( [tf.nn.l2_loss(v) for v in tf.trainable_variables()] )
+                model_loss = self.trade_off * encoder_loss + (1. - self.trade_off) * decoder_loss
+                total_loss = model_loss + decay_loss
+
+                tf.summary.scalar('encoder_loss', encoder_loss)
+                tf.summary.scalar('decoder_loss', decoder_loss)
+                tf.summary.scalar('decay_loss', decay_loss)
+                tf.summary.scalar('model_loss', model_loss)
+                tf.summary.scalar('total_loss', total_loss)
+
+                eval_decay_loss = decay_loss
+                eval_model_loss = model_loss
+                eval_total_loss = total_loss
 
             # global step
             global_step = tf.train.get_or_create_global_step()
@@ -359,17 +344,26 @@ class BaseModel:
             with tf.variable_scope('info'):
                 learning_rate = tf.identity(opt._lr, 'learning_rate')
                 tf.summary.scalar('learning_rate', learning_rate)
-
-            
-            self.encoder_loss = encoder_loss
-            self.decoder_loss = decoder_loss
-            self.decay_loss = decay_loss
-            self.total_loss = total_loss
+ 
             self.global_step = global_step
             self.lr = learning_rate
 
             # training op
-            self.train_op = train_op
+            self.train_ops = {
+                    'train_op': train_op,
+                    'decay_loss': train_decay_loss,
+                    'model_loss': train_model_loss,
+                    'total_loss': train_total_loss
+                }
+
+
+            # eval op
+            self.eval_ops = {
+                    'decay_loss': eval_decay_loss,
+                    'model_loss': eval_model_loss,
+                    'total_loss': eval_total_loss
+                }
+
 
             # prediction op
             self.predict_ops = {
@@ -380,23 +374,237 @@ class BaseModel:
                     'new_sample_id': new_sample_id        # new arch
                 }
 
+            # initialize all variables
             tf.global_variables_initializer().run(session=self.sess)
 
             # summary op
             self.summary_op = tf.summary.merge_all()
 
 
-    def _train_step(self):
-        pass
+
+
+
+    def _data_preprocessing(self, X, y):
+        X_ = np.array(X, copy=True, dtype=np.int32)
+        y_ = np.array(y, copy=True, dtype=np.float32)
+
+        X_ = X_ + 1
+
+        return X_, y_
+
+    def _data_postprocessing(self, X, y):
+        X_ = X - 1
+        y_ = y
+
+        return X_, y_
+
+
+    def _train_step(self, X, X_feed, y, writer):
+        pass #TODO
+
+    def _eval_step(self, X, X_feed, y, writer):
+        pass #TODO
+
+
+    def learn(self, 
+              X, 
+              y, 
+              epochs:               int = 1000,
+              eval_every_n_epochs:  int = 50,
+              log_every_n_epochs:   int = 1,
+              callback                  = None, 
+              log_interval:         int = 1, 
+              tb_log_name:          str = "epd", 
+              reset_num_timesteps: bool = True):
+
+        SOS = 0
+
+        # preprocessing, since 0 is defined as the start of sequence (SOS), each element in X must add 1
+        X_bak, y_bak = self._data_preprocessing(X, y)
+
+        # === check ===
+        assert X_bak.ndim == 2, ValueError("The dimension of input 'X' must equal to 2")
+        assert np.all(X_bak >= 0 and X_bak < encoder_vocab_size), ValueError("Each element of input 'X' must be in the range of the vocab size")
+        assert np.all(y_bak >= 0.0 and y_bak <= 1.0), ValueError("Each element of input 'y' must be normalized between 0 ~ 1")
+        assert len(X_bak) == len(y_bak), ValueError("The size of input 'X' and 'y' must be equal")
+        assert len(X_bak) > 10, "The number of training samples 'X' must be greater than 10"
+
+        # === initialize global step ===
+        new_tb_log = self._initialize_global_step(reset_num_timesteps)
+
+
+        with TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) as writer:
+
+            # calculate the total number of items
+            num_items = len(y_bak)
+
+            # shuffled indices
+            index_shuffle = [idx for idx in range(len(num_items))]
+            np.random.shuffle(index_shuffle)
+
+            # shuffled samples
+            X_shuffle = X_bak[index_shuffle]
+            y_shuffle = y_bak[index_shuffle]
+
+            # calculate training data size
+            train_num = int(num_items * 0.7)
+            eval_num = num_items - train_num
+
+            # split to training set and eval set
+            X_train = X_shuffle[:train_num]
+            y_train = y_shuffle[:train_num]
+
+            X_eval = X_shuffle[train_num:]
+            y_eval = y_shuffle[train_num:]
+
+            # for training LSTM, insert 0 in the beginning and crop the last element in each row
+            X_train_feed = np.pad(np.copy(X_train), ((0, 0), (1, 0)), 'constant', constant_values=SOS)[..., :-1]
+            X_eval_feed = np.pad(np.copy(X_eval), ((0, 0), (1, 0)), 'constant', constant_values=SOS)[..., :-1]
+
+
+            # total training/eval steps of each epoch
+            n_updates = train_num // self.batch_size + 1
+            n_eval = eval_num // self.batch_size + 1
+            index_shuffle = [idx for idx in range(len(train_num))]
+
+            t_first_start = time.time()
+
+            for epoch in range(1, epochs+1):
+
+                # shuffle 
+                np.random.shuffle(index_shuffle)
+                
+                X_ = X_train[index_shuffle]
+                y_ = y_train[index_shuffle]
+                X_feed = X_train_feed[index_shuffle]
+
+                # === some containers ===
+                epoch_train_loss_vals = []
+                epoch_eval_loss_vals = []
+
+                # === start epoch ===
+
+                # === start training ===
+                t_start = time.time()
+
+                for update in range(1, n_updates+1):
+
+                    start_ind = (update-1) * self.batch_size
+                    end_ind = start_ind + self.batch_size
+
+                    # clamp
+                    end_ind = end_ind if end_ind <= train_num else train_num
+
+                    # get slice
+                    X_slice = X_[start_ind:end_ind]
+                    y_slice = y_[start_ind:end_ind]
+                    X_feed_slice = X_feed[start_ind:end_ind]
+
+                    # train step
+                    epoch_train_loss_vals.append(
+                            self._train_step(X_slice, y_slice, X_feed_slice, writer=writer)
+                            )                
+
+                t_end = time.time()
+
+                t_training_time = t_end - t_start
+
+                # === start eval ===
+                if epoch % eval_every_n_epochs == 0:
+
+                    t_eval_start = t_end
+
+                    for update in range(1, n_eval+1):
+
+                        start_ind = (update-1) * self.batch_size
+                        end_ind = start_ind + self.batch_size
+
+                        # clamp
+                        end_ind = end_ind if end_ind <= eval_num else eval_num
+
+                        # get slice
+                        X_slice = X_eval[start_ind:end_ind]
+                        y_slice = y_eval[start_ind:end_ind]
+                        X_feed_slice = X_eval_feed[start_ind:end_ind]
+
+                        # eval step
+                        epoch_eval_loss_vals.append(
+                                self._eval_step(X_slice, y_slice, X_feed_slice, writer=writer)
+                                )
+                    
+                    t_eval_end = time.time()
+                    t_eval_time = t_eval_end - t_eval_start
+
+                    t_end = t_eval_end
+
+                else:
+                    t_eval_time = None
+
+                
+                t_epoch_time = t_end - t_start
+
+
+                if epoch % log_every_n_epochs == 0 or epoch % eval_every_n_epochs == 0:
+                    
+                    log_kvpair = {
+                            'epochs': '{}/{}'.format(epoch, epochs+1),
+                            'epoch_time': t_epoch_time,
+                            'training_time': t_training_time,
+                            'training_encoder_loss': None, #TODO
+                            'training_decoder_loss': None, #TODO
+                            'training_decay_loss': None, #TODO
+                            'training_model_loss': None, #TODO
+                            'training_total_loss': None, #TODO
+                        }
+
+                    if epoch % eval_every_n_epochs == 0:
+                        log_kvpair['eval'] = True
+                        log_kvpair['eval_time'] = t_eval_time
+                        log_kvpair['eval_encoder_loss'] = None #TODO
+                        log_kvpair['eval_decoder_loss'] = None #TODO
+                        log_kvpair['eval_decay_loss'] = None #TODO
+                        log_kvpair['eval_model_loss'] = None #TODO
+                        log_kvpair['eval_total_loss'] = None #TODO
+
+
+
+
+    def predict(self, seeds, lambdas=[10, 20, 30]):
+        pass #TODO
+
+
+    @classmethod
+    def load(cls, load_path):
+        data, params = cls._load_model(load_path)
+        
+        model = cls(_init_setup_model=False)
+        model.__dict__.update(data)
+        model._setup_model()
+        
+        model._load_parameters(params)
+        
+        return model
+
+
+    def save(self, save_path):
+        
+        data = self._build_param_dict()
+
+        params = self._get_parameters()
+        
+        self._save_model(save_path, data, params)
+
 
     def _initialize_global_step(reset_num_timesteps):
 
+        # if reset_num_timesteps == True: assign 0 to global_step
         if reset_num_timesteps:
             self.sess.run(
                     [self.global_step.assign(0)]
                     )
 
         return self.sess.run( [self.global_step] ) == 0
+
 
     @staticmethod
     def _save_model(save_path, data, params=None):
