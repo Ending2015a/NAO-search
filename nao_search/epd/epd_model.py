@@ -36,18 +36,18 @@ class BaseModel:
                 trade_off:         float = 0.8,
                 batch_size:          int = 128,
                 learning_rate:     float = 0.001,
-                optimizer:           str = 'adam',  # DO NOT CHANGE
+                optimizer:           str = 'adam',  # DO NOT MODIFY
                 start_decay_step:    int = 100,     # X
                 decay_steps:         int = 1000,    # X
                 decay_factor:      float = 0.9,     # X
-                attention:          bool = True,    # DO NOT CHANGE
+                attention:          bool = True,    # DO NOT MODIFY
                 max_gradient_norm: float = 5.0,
                 beam_width:          int = 0,
-                time_major:         bool = True,    # DO NOT CHANGE
+                time_major:         bool = True,    # DO NOT MODIFY
 
                 num_cpu:               int = 0,
                 full_tensorboard_log: bool = False,
-                _init_setup_model:    bool = False): # DO NOT CHANGE
+                _init_setup_model:    bool = False): # DO NOT MODIFY
 
         '''
         :param encoder_num_layers: (int) The number of hidden layers of the encoder
@@ -221,8 +221,8 @@ class BaseModel:
                 self.train_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input_ph, self.decoder_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Decoder')
 
                 # get loss
-                train_encoder_loss = self.train_encoder.loss
-                train_decoder_loss = self.train_decoder.loss
+                train_encoder_loss = self.train_encoder.loss # Encoder/square_error
+                train_decoder_loss = self.train_decoder.loss # Decoder/cross_entropy
 
                 # set reuse variables
                 tf.get_variable_scope().reuse_variables()
@@ -238,8 +238,8 @@ class BaseModel:
                 # decoder
                 self.eval_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_intput_ph, self.decoder_ph, self.params,mode=tf.estimator.ModeKeys.EVAL, scope='Decoder')
 
-                eval_encoder_loss = self.eval_encoder.loss
-                eval_decoder_loss = self.eval_decoder.loss
+                eval_encoder_loss = self.eval_encoder.loss # Encoder/square_error
+                eval_decoder_loss = self.eval_decoder.loss # Decoder/cross_entropy
 
                 # === predict ===
 
@@ -293,9 +293,13 @@ class BaseModel:
                 tf.summary.scalar('model_loss', model_loss)
                 tf.summary.scalar('total_loss', total_loss)
 
+                train_encoder_loss = encoder_loss
+                train_decoder_loss = decoder_loss
                 train_decay_loss = decay_loss
                 train_model_loss = model_loss
                 train_total_loss = total_loss
+
+                self.train_summary_op = tf.summary.merge_all(scope=tf.get_variable_scope())
 
 
             # compute eval loss
@@ -312,9 +316,14 @@ class BaseModel:
                 tf.summary.scalar('model_loss', model_loss)
                 tf.summary.scalar('total_loss', total_loss)
 
+                eval_encoder_loss = encoder_loss
+                eval_decoder_loss = decoder_loss
                 eval_decay_loss = decay_loss
                 eval_model_loss = model_loss
                 eval_total_loss = total_loss
+
+                self.eval_summary_op = tf.summary.merge_all(scope=tf.get_variable_scope())
+
 
             # global step
             global_step = tf.train.get_or_create_global_step()
@@ -351,6 +360,8 @@ class BaseModel:
             # training op
             self.train_ops = {
                     'train_op': train_op,
+                    'encoder_loss': train_encoder_loss,
+                    'decoder_loss': train_decoder_loss,
                     'decay_loss': train_decay_loss,
                     'model_loss': train_model_loss,
                     'total_loss': train_total_loss
@@ -359,6 +370,8 @@ class BaseModel:
 
             # eval op
             self.eval_ops = {
+                    'encoder_loss': eval_encoder_loss,
+                    'decoder_loss': eval_decoder_loss,
                     'decay_loss': eval_decay_loss,
                     'model_loss': eval_model_loss,
                     'total_loss': eval_total_loss
@@ -399,11 +412,110 @@ class BaseModel:
         return X_, y_
 
 
-    def _train_step(self, X, X_feed, y, writer):
-        pass #TODO
+    def _train_step(self, X, X_feed, y, writer, epoch):
 
-    def _eval_step(self, X, X_feed, y, writer):
-        pass #TODO
+        train_ops_name = list(self.train_ops.keys())
+        train_ops = [self.train_ops[name] for name in train_ops_name]
+
+        feed_dict = {
+                self.encoder_ph: X,
+                self.decoder_ph: X,
+                self.decoder_input_ph: X_feed,
+                self.target_ph: y,
+            }
+
+        # get ops list
+        ops_name = ['global_step', 'learing_rate'] + train_ops_name
+        ops = [self.global_step, self.lr] + train_ops
+
+        if writer is not None:
+
+            # add summary op to ops list
+            ops_name = ['summary'] + ops_name
+            ops = [self.train_summary_op] + ops
+            
+            if self.full_tensorboard_log:
+                run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                run_metadata = tf.RunMetadata()
+
+                outputs = self.sess.run(
+                        ops,
+                        feed_dict,
+                        options=run_options,
+                        run_metadata=run_metadata)
+
+                output_dict = dict(zip(ops_name, outputs))
+
+                writer.add_run_metadata(run_metadata, 'step%d' % output_dict['global_step'])
+
+            else:
+                outputs = self.sess.run(
+                        ops,
+                        feed_dict)
+
+                output_dict = dict(zip(ops_name, outputs))
+
+            writer.add_summary(output_dict['summary'], output_dict['global_step'])
+
+        else:
+            outputs = self.sess.run(
+                    ops, 
+                    feed_dict)
+
+            output_dict = dict(zip(ops_name, outputs))
+
+
+        return_ops_name = train_ops_name
+        return_ops_output = [output_dict[name] for name in return_ops_name]
+
+
+        return dict(zip(return_ops_name, return_ops_output))
+
+
+
+    def _eval_step(self, X, X_feed, y, writer, epoch):
+        
+        eval_ops_name = list(self.eval_ops.keys())
+        eval_ops = [self.eval_ops[name] for name in eval_ops_name]
+
+        feed_dict = {
+                self.encoder_ph: X,
+                self.decoder_ph: X,
+                self.decoder_input_ph: X_feed,
+                self.target_ph: y,
+            }
+
+        # get ops list
+        ops_name = eval_ops_name
+        ops = eval_ops
+
+        if writer is not None:
+
+            # add summary op to ops list
+            ops_name = ['summary'] + ops_name
+            ops = [self.eval_summary_op] + ops
+            
+            outputs = self.sess.run(
+                    ops,
+                    feed_dict)
+
+            output_dict = dict(zip(ops_name, outputs))
+
+            writer.add_summary(output_dict['summary'], epoch)
+
+        else:
+            outputs = self.sess.run(
+                    ops,
+                    feed_dict)
+
+            output_dict = dict(zip(ops_name, outputs))
+
+
+        return_ops_name = eval_ops_name
+        return_ops_output = [output_dict[name] for name in return_ops_name]
+
+
+        return dict(zip(return_ops_name, return_ops_output))
 
 
     def learn(self, 
@@ -502,7 +614,7 @@ class BaseModel:
 
                     # train step
                     epoch_train_loss_vals.append(
-                            self._train_step(X_slice, y_slice, X_feed_slice, writer=writer)
+                            self._train_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1)
                             )                
 
                 t_end = time.time()
@@ -529,7 +641,7 @@ class BaseModel:
 
                         # eval step
                         epoch_eval_loss_vals.append(
-                                self._eval_step(X_slice, y_slice, X_feed_slice, writer=writer)
+                                self._eval_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1)
                                 )
                     
                     t_eval_end = time.time()
@@ -545,27 +657,74 @@ class BaseModel:
 
 
                 if epoch % log_every_n_epochs == 0 or epoch % eval_every_n_epochs == 0:
-                    
+
+
+                    avg_loss = {
+                            'encoder_loss': 0.0,
+                            'decoder_loss': 0.0,
+                            'decay_loss': 0.0,
+                            'model_loss': 0.0,
+                            'total_loss': 0.0
+                        }
+
+                    # sum
+                    for d in epoch_train_loss_vals:
+                        for name in avg_loss.keys():
+                            avg_loss[name] += d[name]
+
+                    # average
+                    total_vals_num = len(epoch_train_loss_vals)
+                    for name in avg_loss.keys():
+                        avg_loss[name] /= total_vals_num
+
+
                     log_kvpair = {
                             'epochs': '{}/{}'.format(epoch, epochs+1),
                             'epoch_time': t_epoch_time,
                             'training_time': t_training_time,
-                            'training_encoder_loss': None, #TODO
-                            'training_decoder_loss': None, #TODO
-                            'training_decay_loss': None, #TODO
-                            'training_model_loss': None, #TODO
-                            'training_total_loss': None, #TODO
+                            'training_encoder_loss': avg_loss['encoder_loss']
+                            'training_decoder_loss': avg_loss['decoder_loss']
+                            'training_decay_loss': avg_loss['decay_loss']
+                            'training_model_loss': avg_loss['model_loss']
+                            'training_total_loss': avg_loss['total_loss']
                         }
 
                     if epoch % eval_every_n_epochs == 0:
+
+                        
+                        avg_loss = {
+                                'encoder_loss': 0.0,
+                                'decoder_loss': 0.0,
+                                'decay_loss': 0.0,
+                                'model_loss': 0.0,
+                                'total_loss': 0.0
+                            }
+
+                        # sum
+                        for d in epoch_eval_loss_vals:
+                            for name in avg_loss.keys():
+                                avg_loss[name] += d[name]
+
+                        # average
+                        total_vals_num = len(epoch_eval_loss_vals)
+                        for name in avg_loss.keys():
+                            avg_loss[name] /= total_vals_num
+
                         log_kvpair['eval'] = True
                         log_kvpair['eval_time'] = t_eval_time
-                        log_kvpair['eval_encoder_loss'] = None #TODO
-                        log_kvpair['eval_decoder_loss'] = None #TODO
-                        log_kvpair['eval_decay_loss'] = None #TODO
-                        log_kvpair['eval_model_loss'] = None #TODO
-                        log_kvpair['eval_total_loss'] = None #TODO
+                        log_kvpair['eval_encoder_loss'] = avg_loss['encoder_loss']
+                        log_kvpair['eval_decoder_loss'] = avg_loss['decoder_loss']
+                        log_kvpair['eval_decay_loss'] = avg_loss['decay_loss']
+                        log_kvpair['eval_model_loss'] = avg_loss['model_loss']
+                        log_kvpair['eval_total_loss'] = avg_loss['total_loss']
 
+                    
+                    log_kvpair #TODO: output to log
+
+
+            if callback is not None:
+                if callback(locals(), globals()) is False:
+                    break
 
 
 
