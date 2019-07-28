@@ -179,11 +179,11 @@ class Model(object):
             'loss': self.total_loss,
         }
 
-    def infer(self):
+    def infer(self, predict_lambda):
         assert self.mode == tf.estimator.ModeKeys.PREDICT
         grads_on_outputs = tf.gradients(self.predict_value, self.encoder_outputs)[0]
         #lambdas = tf.expand_dims(tf.expand_dims(lambdas, axis=-1), axis=-1)
-        new_arch_outputs = self.encoder_outputs - self.params['predict_lambda'] * grads_on_outputs
+        new_arch_outputs = self.encoder_outputs - predict_lambda * grads_on_outputs
         new_arch_outputs = tf.nn.l2_normalize(new_arch_outputs, dim=-1)
         if self.time_major:
             new_arch_emb = tf.reduce_mean(new_arch_outputs, axis=0)

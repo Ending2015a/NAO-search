@@ -4,86 +4,49 @@ import time
 import logging
 
 from nao_search import epd
-from nao_search.common import LoggingConfig #done
-from nao_search.common.utils import random_skills #done
 
-from stable_baselines import PPO2
-from stable_baselines.common.policies import CnnPolicy
+from nao_search.common.logger import LoggingConfig
 
-from stable_baselines.common.vec_env import SubprocVecEnv
-
-# === your game ===
-from nes.py.wrappers import BinarySpaceToDiscreteSpaceEnv
-import gym_super_mario_bros as gym_mario
-
-from gym_mario.actions import COMPLEX_MOVEMENT
-from skill_wrapper import RewardWrapper
-
-def make_env():
-    env = gym_mario.make('SuperMarioBros-v0')
-    env = BinarySpaceToDiscreteSpaceEnv(env, COMPLEX_MOVEMENT)
-    env = RewardWrapper(env, gamma=0.9)
-    return env
-# =================
-
-# ===== Hyperparameters =====
+from nao_search.common.utils import random_sequences
+from nao_search.common.utils import min_max_normalization
+from nao_search.common.utils import get_top_n
 
 
-# ===========================
-
-# ===== Other Parameters ====
+LoggingConfig.Use(filename='nao_training.log', output_to_file=True, level='DEBUG')
 
 
+# === generate sequences ===
 
-# ===========================
+seqs = random_sequences(length=60,
+                        seq_num=300,
+                        vocab_size=10)
+
+# === calculate score ===
+
+def get_score(seq):
+    return sum(seq)
+
+scores = []
+for seq in seqs:
+    scores.append(get_score(seq))
+
+norm_scores = min_max_normalization(scores)
+
+# create model
+epd_model = epd.BaseModel(source_length=60,
+                          encoder_vocab_size=10,
+                          decoder_vocab_size=10,
+                          num_cpu=1,
+                          tensorboard_log='epd_log',
+                          full_tensorboard_log=True)
 
 
-LoggingConfig.Use(filename='searching.log', level='INFO')
-LOG = logging.getLogger()
 
-def makedirs(path):
-    import errno
-    try:
-        os.makedirs(path)
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            raise
+epd_model.learn(X=seqs,
+                y=norm_scores,
+                log_interval=1,
+                tb_log_name='epd_seq_search')
 
 
-'''
-How to use epd model
+epd_model.save('epd_seq_search.model')
 
-* Create new epd model
-
-    epd_model = epd.Model()
-
-* Load epd model from file
-
-    epd_model = epd.load('my_epd.model')
-    
-    or
-
-    epd_model = epd.Model()
-    epd_model.load('my_epd.model')
-
-* Save your model
-
-    epd_model.save('my_new_epd.model')
-
-* Train your epd model
-
-    skills = random_skills(...)
-    scores = ...
-
-    epd_model.fit(skills, scores)
-
-* Predict new skills
-    
-    seed_skills = getTop50(skills, scores)
-    epd_model.predict(seeds=seed_skills, lambdas=[10, 20, 30])
-
-* Predict score
-    
-    score = epd_model.predict_score(skill)
-
-'''

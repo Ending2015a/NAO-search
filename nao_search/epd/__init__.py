@@ -1,7 +1,7 @@
-from .epd_model import Model
-from .epd_model import load
+#from .epd_model import Model
+from .epd_model import BaseModel
 
 __all__ = [
-    Model.__name__,
-    load.__name__
+    BaseModel.__name__,
+#    Model.__name__,
 ]

@@ -2,12 +2,17 @@ import random
 
 from copy import deepcopy
 
-def random_skills(skill_length, skill_num, action_space=5):
-    d = {}
-    while len(d) < skill_num:
-        skill = [ random.randint(0, action_space) for _ in range(skill_length)]
-        d[skill] = 1
-    return list(d.keys())
+
+def random_sequences(length, seq_num, vocab_size):
+
+    assert vocab_size > 0, ValueError("Vocab_size must be greater than 0")
+
+    d = []
+    while len(d) < seq_num:
+        seq = [ random.randint(0, vocab_size-1) for _ in range(length)]
+        if not seq in d:
+            d.append(seq)
+    return d
 
 
 def min_max_normalization(X):
@@ -36,21 +41,21 @@ def standard_normalization(X):
     return X_
 
 
-def get_top_n(N, skills, scores):
+def get_top_n(N, seqs, scores):
     assert N > 0, ValueError('N must be greater than 0') 
-    assert len(skills) > 0, ValueError("The length of the skill list must be greater than 0")
-    assert len(skills) == len(scores), ValueError("The skill list and score list have different size")
+    assert len(seqs) > 0, ValueError("The length of the seq list must be greater than 0")
+    assert len(seqs) == len(scores), ValueError("The seq and score list have different size")
 
-    skills_bak = deepcopy(skills)
+    seqs_bak = deepcopy(seqs)
     scores_bak = deepcopy(scores)
 
-    skills_bak, scores_bak = zip(*sorted(zip(scores_bak, skills_bak), reverse=True))
+    scores_bak, seqs_bak = zip(*sorted(zip(scores_bak, seqs_bak), reverse=True))
 
-    return list(skills_bak)[:N], list(scores_bak)[:N]
+    return list(seqs_bak)[:N], list(scores_bak)[:N]
 
 
 __all__ = [
-        random_skills.__name__,
+        random_sequences.__name__,
         min_max_normalization.__name__,
         standard_normalization.__name__,
         get_top_n.__name__

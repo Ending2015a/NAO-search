@@ -63,6 +63,6 @@ class TensorboardWriter:
             self.writer.flush()
 
 __all__ = [
-        make_session.__name__
-        TensorboardW
+        make_session.__name__,
+        TensorboardWriter.__name__
         ]
