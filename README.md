@@ -1,4 +1,4 @@
-# NAO Skill Search
+# NAO Search
 
 ## Introduction
 A simplified tensorflow version of Neural Architecture Optimization.
