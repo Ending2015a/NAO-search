@@ -620,6 +620,7 @@ class BaseModel:
 
         # === check ===
         assert X_bak.ndim == 2, ValueError("The dimension of input 'X' must equal to 2")
+        assert X_bak.shape[-1] == self.source_length, ValueError("The last dimension of input 'X' must match to 'source_length'")
         assert np.all( (X_bak >= 0) & (X_bak <= self.encoder_vocab_size) ), ValueError("Each element of input 'X' must be in the range of the vocab size")
         assert np.all( (y_bak >= 0.0) & (y_bak <= 1.0) ), ValueError("Each element of input 'y' must be normalized between 0 ~ 1")
         assert len(X_bak) == len(y_bak), ValueError("The size of input 'X' and 'y' must be equal")
@@ -659,9 +660,41 @@ class BaseModel:
 
 
             # total training/eval steps of each epoch
-            n_updates = train_num // self.batch_size + 1
-            n_eval = eval_num // self.batch_size + 1
+            n_updates = train_num // self.batch_size
+            n_eval = eval_num // self.batch_size
+
+            if train_num % self.batch_size > 0:
+                n_updates += 1
+
+            if eval_num % self.batch_size > 0:
+                n_eval += 1
+ 
             index_shuffle = [idx for idx in range(train_num)]
+
+            
+            # === DEBUG LOG ===
+            self.LOG.set_header('DEBUG LOG: Learn')
+            self.LOG.switch_group('Training info')
+            self.LOG.add_pair('batch_size', self.batch_size)
+            self.LOG.add_pair('training steps per epoch', n_updates)
+            self.LOG.add_pair('eval steps per epoch', n_eval)
+
+            self.LOG.switch_group('Dataset')
+            self.LOG.add_pair('training samples', train_num)
+            self.LOG.add_pair('eval samples', eval_num)
+
+            self.LOG.switch_group('Dataset shape')
+            self.LOG.add_pair('train X', X_train.shape)
+            self.LOG.add_pair('train y', y_train.shape)
+            self.LOG.add_pair('train X_feed', X_train_feed.shape)
+            self.LOG.add_pair('eval X', X_eval.shape)
+            self.LOG.add_pair('eval y', y_eval.shape)
+            self.LOG.add_pair('eval X_feed', X_eval_feed.shape)
+
+            self.LOG.dump_to_log(level=logging.DEBUG)
+            # =================
+
+
 
             t_first_start = time.time()
 
@@ -677,6 +710,7 @@ class BaseModel:
                 # === some containers ===
                 epoch_train_loss_vals = []
                 epoch_eval_loss_vals = []
+
 
                 # === start epoch ===
 
@@ -823,7 +857,25 @@ class BaseModel:
 
 
     def predict(self, seeds, lambdas=[10, 20, 30]):
-        pass #TODO
+        
+        # === check ===
+        assert seeds.ndim == 2, ValueError("The dimension of input 'seeds' must be 2")
+        assert seeds.shape[-1], ValueError("The last dimension of input 'seeds' must match to source_length")
+        # =============
+
+        # === preprocess lambda ===
+        if not isinstance(lambdas, list):
+            lambdas = list(lambdas)
+
+        lambdas = np.array(lambdas, dtype=np.float32)
+        # =========================
+
+        # === DEBUG LOG ===
+        self.LOG.set_header('DEBUG LOG: Predict')
+        self.LOG.add_pair('lambdas', lambdas)
+        self.LOG.add_pair('seeds num', len(seeds))
+        self.LOG.dump_to_log(level=logging.DEBUG)
+        # =================
 
 
     @classmethod
@@ -917,7 +969,12 @@ class BaseModel:
         feed_dict = {}
         param_update_ops = []
         not_updated_variables = set(self._param_load_ops.keys())
-        
+
+        # === LOG ===
+        self.LOG.set_header('Load model')
+        self.LOG.switch_group('loaded variables')
+        # ===========
+
         for param_name, param_value in params.items():
             placeholder, assign_op = self._param_load_ops[param_name]
             feed_dict[placeholder] = param_value
@@ -926,11 +983,21 @@ class BaseModel:
 
             not_updated_variables.remove(param_name)
 
-            self.LOG.info('variable: {} loaded'.format(param_name))
+            # === LOG ===
+            self.LOG.add_pair(param_name, '', fmt='{key}')
+            # ===========
 
+        # === LOG ===
         if len(not_updated_variables) > 0:
+            self.LOG.switch_group('missing variables')
+
             for var in not_updated_variables:
-                self.LOG.warning('missing variable: {}'.format(var))
+                self.LOG.add_pair(var, '', fmt='{key}')
+
+            self.LOG.dump_to_log(level=logging.WARNING)
+        else:
+            self.LOG.dump_to_log(level=logging.DEBUG)
+        # ===========
 
         self.sess.run(param_update_ops, feed_dict=feed_dict)
 
@@ -942,7 +1009,25 @@ class BaseModel:
         parameters = self._get_parameter_list()
         parameter_values = self.sess.run(parameters)
 
-        return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
+        return_dictionary = OrderedDict()
+
+        # === LOG ===
+        self.LOG.set_header('Save model')
+        self.LOG.switch_group('variables')
+        # ===========
+
+        for param, value in zip(parameters, parameter_values):
+            # === LOG ===
+            self.LOG.add_pair(param.name, '', fmt='{key}')
+            # ===========
+
+            return_dictionary[param.name] = value
+
+        #return_dictionary = OrderedDict((param.name, value) for param, value in zip(parameters, parameter_values))
+
+        # === LOG ===
+        self.LOG.dump_to_log(level=logging.DEBUG)
+        # ===========
 
         return return_dictionary
 
