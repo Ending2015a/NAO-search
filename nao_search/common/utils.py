@@ -41,7 +41,7 @@ def standard_normalization(X):
     return X_
 
 
-def get_top_n(N, seqs, scores):
+def get_top_n(N, seqs, scores, reverse=False):
     assert N > 0, ValueError('N must be greater than 0') 
     assert len(seqs) > 0, ValueError("The length of the seq list must be greater than 0")
     assert len(seqs) == len(scores), ValueError("The seq and score list have different size")
@@ -49,7 +49,7 @@ def get_top_n(N, seqs, scores):
     seqs_bak = deepcopy(seqs)
     scores_bak = deepcopy(scores)
 
-    scores_bak, seqs_bak = zip(*sorted(zip(scores_bak, seqs_bak), reverse=True))
+    scores_bak, seqs_bak = zip(*sorted(zip(scores_bak, seqs_bak), reverse=not reverse))
 
     return list(seqs_bak)[:N], list(scores_bak)[:N]
 
