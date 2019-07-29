@@ -3,6 +3,7 @@
 ## Introduction
 A simplified stable_baselines-style tensorflow version of Neural Architecture Optimization.
 
+Original version: [renqianluo/NAO](https://github.com/renqianluo/NAO)
 
 ## Example: Learning Random Generated Sequences
 ```python
