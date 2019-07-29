@@ -43,16 +43,45 @@ with open('data/encoder.test.target', 'r') as f:
 epd_model = epd.BaseModel(source_length=60,
                           encoder_vocab_size=21,
                           decoder_vocab_size=21,
+                          learning_rate=0.0003,
                           num_cpu=1,
                           tensorboard_log='nao_logs',
                           input_processing=False,
                           full_tensorboard_log=False)
 
+# learn
 epd_model.learn(X=seqs,
                 y=scores,
+                epochs=1000,
                 log_interval=1,
                 tb_log_name='arch_search')
 
 
+# evaluate model
+epd_model.eval(X=seqs,
+               y=scores)
+
+# save model
 epd_model.save('nao_arch_search.model')
+
+
+# delete model
+del epd_model
+epd_model = None
+
+
+
+# load model
+epd_model = epd.BaseModel.load('nao_arch_search.model',
+                               num_cpu=1,
+                               tensorboard_log='nao_logs',
+                               input_processing=False,
+                               full_tensorboard_log=False)
+
+# evaluate model
+epd_model.eval(X=seqs,
+               y=scores)
+
+
+
 

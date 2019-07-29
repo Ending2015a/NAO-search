@@ -5,6 +5,11 @@ A simplified stable_baselines-style tensorflow version of Neural Architecture Op
 
 Original version: [renqianluo/NAO](https://github.com/renqianluo/NAO)
 
+## Requirements
+* Tensorflow >= 1.13.0
+* cloudpickle >= 0.5.5
+* numpy
+
 ## Example: Learning Random Generated Sequences
 ```python
 import os

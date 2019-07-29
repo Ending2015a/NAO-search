@@ -217,7 +217,7 @@ class BaseModel:
             self.decoder_input_ph = tf.placeholder(shape=(None, self.source_length), dtype=tf.int32, name='decoder_input_ph')
 
             self.encoder_target_ph = tf.placeholder(shape=(None, ), dtype=tf.float32, name='encoder_target_ph')
-            self.predict_lambda_ph = tf.placeholder(shape=(1,), dtype=tf.float32)
+            self.predict_lambda_ph = tf.placeholder(shape=(1,), dtype=tf.float32, name='predict_lambda_ph')
 
 
             reshaped_target_ph = tf.reshape(self.encoder_target_ph, shape=(-1, 1))
@@ -317,7 +317,7 @@ class BaseModel:
 
                 # decode old arch (evaluate)
                 res = tmp_decoder.decode()
-                sample_id = tf.reshape(res['sample_id'], shape=(-1, self.decoder_length))
+                predict_sample_id = tf.reshape(res['sample_id'], shape=(-1, self.decoder_length))
 
                 encoder_state = new_arch_emb
                 encoder_state.set_shape([None, self.decoder_hidden_size])
@@ -327,7 +327,7 @@ class BaseModel:
                 # decode new arch
                 self.pred_decoder = decoder.Model(new_arch_outputs, encoder_state, dummy_decoder_input, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Decoder')
                 res = self.pred_decoder.decode()
-                new_sample_id = tf.reshape(res['sample_id'], shape=(-1, self.decoder_length))
+                predict_new_sample_id = tf.reshape(res['sample_id'], shape=(-1, self.decoder_length))
 
 
             # compute training loss
@@ -440,8 +440,8 @@ class BaseModel:
                     'ground_truth_seq': self.decoder_target_ph,
                     'ground_truth_value': self.encoder_target_ph, # ground truth score
                     'predict_value': predict_value,               # predicted score
-                    'predict_old_seq': sample_id,                 # old arch (evaluate)
-                    'predict_new_seq': new_sample_id              # new arch
+                    'predict_old_seq': predict_sample_id,         # old arch (evaluate)
+                    'predict_new_seq': predict_new_sample_id      # new arch
                 }
 
             # initialize all variables
@@ -472,8 +472,8 @@ class BaseModel:
             self.LOG.add_pair('ground_truth_seq shape',   self.decoder_target_ph.get_shape())
             self.LOG.add_pair('ground_truth_value shape', self.encoder_target_ph.get_shape())
             self.LOG.add_pair('predict_value shape',      predict_value.get_shape())
-            self.LOG.add_pair('predict_old_seq shape',    sample_id.get_shape())
-            self.LOG.add_pair('predict_new_seq shape',    new_sample_id.get_shape())
+            self.LOG.add_pair('predict_old_seq shape',    predict_sample_id.get_shape())
+            self.LOG.add_pair('predict_new_seq shape',    predict_new_sample_id.get_shape())
             # =================
 
         self.LOG.dump_to_log(level=logging.DEBUG)
@@ -482,20 +482,20 @@ class BaseModel:
     def _data_preprocessing(self, X=None, y=None):
 
         # processing
-        if X:
+        if not X is None:
             X_ = np.array(X, copy=True, dtype=np.int32)
             X_ = X_ + 1
 
-        if y:    
+        if not y is None:    
             y_ = np.array(y, copy=True, dtype=np.float32)
             y_ = 1. - y_
 
         # return
-        if X and y:
+        if (not X is None) and (not y is None):
             return X_, y_
-        elif X:
+        elif not X is None:
             return X_
-        elif y:
+        elif not y is None:
             return y_
 
         return
@@ -503,18 +503,18 @@ class BaseModel:
     def _data_postprocessing(self, X=None, y=None):
         
         # processing
-        if X:
+        if not X is None:
             X_ = X - 1
 
-        if y:
+        if not y is None:
             y_ = 1. - y
 
         # return
-        if X and y:
+        if (not X is None) and (not y is None):
             return X_, y_
-        elif X:
+        elif not X is None:
             return X_
-        elif y:
+        elif not y is None:
             return y_
 
         return 
@@ -627,26 +627,28 @@ class BaseModel:
 
 
     def _predict_step(self, X, ld, y=None):
-        
-        pred_ops_name = list(self.predict_ops.keys())
-        pred_ops = [self.pred_ops_name[name] for name in pred_ops_name]
 
         feed_dict = {
                 self.encoder_input_ph: X,
-                self.encoder_target_ph: y
+                self.decoder_target_ph: X,
+                self.predict_lambda_ph: [ld]
             }
 
-        # if no ground truth provided
-        if not y:
+
+        pred_ops_name = list(self.predict_ops.keys())
+
+        # if ground truth value provided
+        if y:
+            feed_dict[self.encoder_target_ph] = y
+        else:
             if 'ground_truth_value' in pred_ops_name:
                 pred_ops_name.remove('ground_truth_value')
-            
-            del feed_dict[self.encoder_target_ph]
+
+        pred_ops = [self.predict_ops[name] for name in pred_ops_name]
 
         # get ops list
         ops_name = pred_ops_name
         ops = pred_ops
-
 
         # predict step
         outputs = self.sess.run(
@@ -944,7 +946,7 @@ class BaseModel:
         input_processing = input_processing if not input_processing is None else self.input_processing
 
         if input_processing:
-            X_bak, t_bak = self._data_preprocessing(X, y)
+            X_bak, y_bak = self._data_preprocessing(X, y)
         else:
             X_bak = np.array(X, copy=True, dtype=np.int32)
             y_bak = np.array(y, copy=True, dtype=np.float32)
@@ -970,9 +972,19 @@ class BaseModel:
         self.LOG.set_header('DEBUG LOG: Eval')
         self.LOG.switch_group('Eval info')
         self.LOG.add_pair('batch_size', self.batch_size)
-        self.LOG.add_pair('eval steps per epoch')
+        self.LOG.add_pair('eval steps', n_eval)
+        self.LOG.dump_to_log(level=logging.DEBUG)
         # =================
 
+        X_eval = X_bak
+        y_eval = y_bak
+        X_eval_feed = np.pad(np.copy(X_eval), ((0, 0), (1, 0)), 'constant', constant_values=self._SOS)[..., :-1]
+
+        # === some containers ===
+        eval_loss_vals = []
+
+
+        # === start evaluate ===
         t_eval_start = time.time()
 
         for update in range(1, n_eval+1):
@@ -1014,7 +1026,7 @@ class BaseModel:
         fmt = '{key}: {value:.6f}'
         self.LOG.set_header('Eval results')
 
-        self.LOG.add_pair('elapsed_time', t_eval_time, fmt=fmt + 'sec')
+        self.LOG.add_pair('elapsed_time', t_eval_time, fmt=fmt + ' sec')
         self.LOG.add_pair('encoder_loss (mse)', avg_loss['encoder_loss'], fmt)
         self.LOG.add_pair('decoder_loss  (ce)', avg_loss['decoder_loss'], fmt)
         self.LOG.add_pair('decay_loss', avg_loss['decay_loss'], fmt)
@@ -1108,16 +1120,22 @@ class BaseModel:
                 'predict_new_seq': []
                 }
 
+
         # for each batch
         for results_batch in results_vals:
+
+            results_batch = zip(results_batch['ground_truth_seq'],
+                                results_batch['predict_old_seq'],
+                                results_batch['predict_new_seq'],
+                                results_batch['predict_value'])
 
             # for each item
             for result in results_batch:
                 
-                ground_truth_seq = result['ground_truth_seq'].flatten()
-                predict_old_seq = result['predict_old_seq'].flatten()
-                predict_new_seq = result['predict_new_seq'].flatten()
-                predict_value = np.asscalar(result['predict_value'])
+                ground_truth_seq = result[0].flatten()
+                predict_old_seq = result[1].flatten()
+                predict_new_seq = result[2].flatten()
+                predict_value = np.asscalar(result[3])
 
                 
                 if input_processing:
@@ -1126,9 +1144,9 @@ class BaseModel:
                     predict_new_seq  = self._data_postprocessing(X=predict_new_seq)
                     predict_value    = self._data_postprocessing(y=predict_value)
 
-                result_list['ground_truth_seq'].append(ground_truth_seq)
-                result_list['predict_old_seq'].append(predict_old_seq)
-                result_list['predict_new_seq'].append(predict_new_seq)
+                result_list['ground_truth_seq'].append(ground_truth_seq.tolist())
+                result_list['predict_old_seq'].append(predict_old_seq.tolist())
+                result_list['predict_new_seq'].append(predict_new_seq.tolist())
                 result_list['predict_value'].append(predict_value)
 
 
@@ -1258,7 +1276,7 @@ class BaseModel:
         not_updated_variables = set(self._param_load_ops.keys())
 
         # === LOG ===
-        self.LOG.set_header('Load model')
+        self.LOG.set_header('DEBUG LOG: Load model')
         self.LOG.switch_group('loaded variables')
         # ===========
 
@@ -1281,6 +1299,7 @@ class BaseModel:
             for var in not_updated_variables:
                 self.LOG.add_pair(var, '', fmt='{key}')
 
+            self.LOG.set_header('WARNING (Missing vairables): Load model')
             self.LOG.dump_to_log(level=logging.WARNING)
         else:
             self.LOG.dump_to_log(level=logging.DEBUG)
@@ -1299,7 +1318,7 @@ class BaseModel:
         return_dictionary = OrderedDict()
 
         # === LOG ===
-        self.LOG.set_header('Save model')
+        self.LOG.set_header('DEBUG LOG: Save model')
         self.LOG.switch_group('variables')
         # ===========
 
