@@ -402,10 +402,12 @@ class BaseModel:
                         tf.summary.histogram(var.name, var)
 
 
-            #with tf.variable_scope('info'):
-            #    learning_rate = opt._lr
-            tf.summary.scalar('learning_rate', learning_rate)
-            tf.summary.scalar('global_step', global_step)
+            with tf.variable_scope('info'):
+                learning_rate = opt._lr
+                tf.summary.scalar('learning_rate', learning_rate)
+                tf.summary.scalar('global_step', global_step)
+
+                tf.summary.merge_all(scope=tf.get_variable_scope().name)
  
             self.global_step = global_step
             self.lr = learning_rate
@@ -756,9 +758,8 @@ class BaseModel:
                             avg_loss[name] += d[name]
 
                     # average
-                    total_vals_num = len(epoch_train_loss_vals)
                     for name in avg_loss.keys():
-                        avg_loss[name] /= total_vals_num
+                        avg_loss[name] = avg_loss[name] / train_num * self.batch_size
 
 
 
@@ -797,9 +798,8 @@ class BaseModel:
                                 avg_loss[name] += d[name]
 
                         # average
-                        total_vals_num = len(epoch_eval_loss_vals)
                         for name in avg_loss.keys():
-                            avg_loss[name] /= total_vals_num
+                            avg_loss[name]  = avg_loss[name] / eval_num * self.batch_size
 
                         # === eval info ===
                         self.LOG.switch_group('Eval')

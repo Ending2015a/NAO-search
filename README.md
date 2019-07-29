@@ -19,6 +19,7 @@ from nao_search.common.utils import random_sequences
 from nao_search.common.utils import min_max_normalization
 from nao_search.common.utils import get_top_n
 
+LoggingConfig.Use(filename='nao_seq_search.log', output_to_file=True, level='DEBUG')
 
 # === Generate sequences ===
 
