@@ -1,7 +1,7 @@
 # NAO Search
 
 ## Introduction
-A simplified tensorflow version of Neural Architecture Optimization.
+A simplified stable_baselines-style tensorflow version of Neural Architecture Optimization.
 
 ## Example: Learning Random Generated Sequences
 ```python
@@ -41,7 +41,7 @@ norm_scores = min_max_normalization(scores)
 
 epd_model = epd.BaseModel(source_length=60,
                           encoder_vocab_size=21,        # vocab_size + <SOS> = 21
-                          decoder_vocab_size=21,
+                          decoder_vocab_size=21,        # vocab_size + <SOS> = 21
                           batch_size=50,
                           num_cpu=1,
                           tensorboard_log='nao_logs',
