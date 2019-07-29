@@ -13,7 +13,7 @@ from nao_search.common.utils import min_max_normalization
 from nao_search.common.utils import get_top_n
 
 
-LoggingConfig.Use(filename='nao_training.log', output_to_file=True, level='DEBUG')
+LoggingConfig.Use(filename='nao_seq_search.log', output_to_file=True, level='DEBUG')
 
 
 # === generate sequences ===
@@ -38,14 +38,14 @@ epd_model = epd.BaseModel(source_length=60,
                           encoder_vocab_size=20,
                           decoder_vocab_size=20,
                           num_cpu=1,
-                          tensorboard_log='epd_log',
+                          tensorboard_log='nao_logs',
                           full_tensorboard_log=False)
 
 epd_model.learn(X=seqs,
                 y=norm_scores,
                 log_interval=1,
-                tb_log_name='rndseq_search')
+                tb_log_name='seq_search')
 
 
-epd_model.save('epd_seq_search.model')
+epd_model.save('nao_seq_search.model')
 
