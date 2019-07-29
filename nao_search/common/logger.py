@@ -13,11 +13,11 @@ class Logger:
         self.LOG = logging.getLogger(name)
         self.LOG.propagate = True
 
-        self.header = None
-        self.groups = OrderedDict()
-        self.groups['None'] = OrderedDict()
+        self.clear()
 
         self.current_group = 'None'
+        
+        self.default_format = '{key}: {value}'
 
     def set_header(self, name=None):
         if not isinstance(name, str):
@@ -34,13 +34,20 @@ class Logger:
 
         self.current_group = name
 
-    def add_pair(self, key, value):
+    def add_pair(self, key, value, fmt=None):
 
         if not self.current_group in self.groups:
             self.groups[self.current_group] = OrderedDict()
 
-        self.groups[self.current_group][key] = value
+        self.groups[self.current_group][key] = {
+                'value': value,
+                'fmt': fmt}
 
+
+    def clear(self):
+        self.header = None
+        self.groups = OrderedDict()
+        self.groups['None'] = OrderedDict()
 
     def _create_header(self, width):
         if self.header is None:
@@ -92,8 +99,15 @@ class Logger:
             if group not in kv_strs:
                 kv_strs[group] = []
 
-            for key, value in pairs.items():
-                string = '{}: {}'.format(key, value)
+            for key, v_dict in pairs.items():
+                value = v_dict['value']
+                fmt = v_dict.get('fmt', None)
+                
+                if fmt is None:
+                    fmt = self.default_format
+
+
+                string = fmt.format(key=key, value=value)
 
                 kv_strs[group].append(string)
                 max_length = max_length if len(string) < max_length else len(string)
@@ -133,8 +147,8 @@ class Logger:
         self.LOG.log(level, self._create_tail(max_width))
         self.LOG.log(level, '')
 
-        self.groups = OrderedDict()
-        self.groups['None'] = OrderedDict()
+        self.clear()
+
 
     def info(self, msg):
         self.LOG.info(msg)

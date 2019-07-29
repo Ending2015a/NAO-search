@@ -3,6 +3,8 @@ import sys
 import time
 import logging
 
+import cloudpickle
+
 import numpy as np
 import tensorflow as tf
 
@@ -36,7 +38,7 @@ class BaseModel:
                 encoder_vocab_size:  int = 21,
                 decoder_vocab_size:  int = 21,
                 trade_off:         float = 0.8,
-                batch_size:          int = 128,
+                batch_size:          int = 50,
                 learning_rate:     float = 0.001,
                 optimizer:           str = 'adam',  # DO NOT MODIFY
                 start_decay_step:    int = 100,     # X
@@ -51,6 +53,7 @@ class BaseModel:
                 num_cpu:               int = 0,
                 tensorboard_log:       str = None,
                 full_tensorboard_log: bool = False,
+                input_processing:     bool = True,
                 _init_setup_model:    bool = True): # DO NOT MODIFY
 
         '''
@@ -81,8 +84,11 @@ class BaseModel:
         :param max_gradient_norm:
         :param beam_width:
         :param time_major:
+
         :param num_cpu:
+        :param tensorboard_log: (str) log path
         :param full_tensorboard_log: (bool)
+        :param input_processing: (bool) automatically preprocess/postprocess input
         '''
     
 
@@ -102,8 +108,8 @@ class BaseModel:
         self.encoder_dropout = encoder_dropout
         self.decoder_dropout = decoder_dropout
         self.weight_decay = weight_decay
-        self.encoder_vocab_size = encoder_vocab_size + 1
-        self.decoder_vocab_size = decoder_vocab_size + 1
+        self.encoder_vocab_size = encoder_vocab_size
+        self.decoder_vocab_size = decoder_vocab_size
         self.trade_off = trade_off
         self.batch_size = batch_size
         self.learning_rate = learning_rate
@@ -122,17 +128,17 @@ class BaseModel:
         self.num_cpu = num_cpu
         self.tensorboard_log = tensorboard_log
         self.full_tensorboard_log = full_tensorboard_log
+        self.input_processing = input_processing
         self.graph = None
         self.sess = None
-        self.encoder_ph = None
-        self.decoder_ph = None
+        self.encoder_input_ph = None
+        self.decoder_target_ph = None
         self.decoder_intput_ph = None
-        self.target_ph = None
+        self.encoder_target_ph = None
 
         # === private ===
         self._param_load_ops = None
         self._SOS = 0
-
 
         self.LOG = Logger()
 
@@ -178,11 +184,24 @@ class BaseModel:
 
     def _setup_model(self):
 
+        # === DEBUG LOG ===
+        self.LOG.set_header('DEBUG_LOG: Setup Model')
+        # =================
+
         self.params = self._build_param_dict()
 
         # get cpu count
         n_cpu = self.num_cpu if self.num_cpu > 0 else multiprocessing.cpu_count()
         self.num_cpu = n_cpu
+
+        # === DEBUG LOG ===
+        self.LOG.switch_group('Hyperparameters')
+        for key, value in self.params.items():
+            fmt=None
+            if isinstance(value, float):
+                fmt = '{key}: {value:.6f}'
+            self.LOG.add_pair(key, value, fmt)
+        # =================
 
         # create graph
         self.graph = tf.Graph()
@@ -192,31 +211,30 @@ class BaseModel:
             self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
 
             # placeholder
-            self.encoder_ph = tf.placeholder(shape=(None, self.source_length), dtype=tf.int32, name='encoder_ph')
-            self.decoder_ph = tf.placeholder(shape=(None, self.source_length), dtype=tf.int32, name='decoder_ph')
+            self.encoder_input_ph = tf.placeholder(shape=(None, self.source_length), dtype=tf.int32, name='encoder_input_ph')
+            self.decoder_target_ph = tf.placeholder(shape=(None, self.source_length), dtype=tf.int32, name='decoder_target_ph')
             self.decoder_input_ph = tf.placeholder(shape=(None, self.source_length), dtype=tf.int32, name='decoder_input_ph')
 
-            self.target_ph = tf.placeholder(shape=(None, ), dtype=tf.float32, name='target_ph')
+            self.encoder_target_ph = tf.placeholder(shape=(None, ), dtype=tf.float32, name='encoder_target_ph')
             self.predict_lambda_ph = tf.placeholder(shape=(1,), dtype=tf.float32)
 
 
-            reshaped_target_ph = tf.reshape(self.target_ph, shape=(-1, 1))
+            reshaped_target_ph = tf.reshape(self.encoder_target_ph, shape=(-1, 1))
 
             # dummy decoder input for predicting
-            dummy_batch_size = tf.shape(self.encoder_ph)[0]
+            dummy_batch_size = tf.shape(self.encoder_input_ph)[0]
             dummy_decoder_input = tf.fill(value=self._SOS, dims=(dummy_batch_size, 1), name='dummy_decoder_input')
 
             # === DEBUG LOG ===
-            self.LOG.set_header('DEBUG LOG: Setup Model')
             self.LOG.switch_group('placeholder')
             
-            self.LOG.add_pair('{} shape'.format(self.encoder_ph.name),        self.encoder_ph.get_shape())
-            self.LOG.add_pair('{} shape'.format(self.decoder_ph.name),        self.decoder_ph.get_shape())
-            self.LOG.add_pair('{} shape'.format(self.decoder_input_ph.name),  self.decoder_input_ph.get_shape())
-            self.LOG.add_pair('{} shape'.format(self.target_ph.name),         self.target_ph.get_shape())
-            self.LOG.add_pair('{} shape'.format(self.predict_lambda_ph.name), self.predict_lambda_ph.get_shape())
-            self.LOG.add_pair('{} shape'.format(dummy_decoder_input.name), dummy_decoder_input.get_shape())
-
+            self.LOG.add_pair('{} shape'.format(self.encoder_input_ph.name),   self.encoder_input_ph.get_shape())
+            self.LOG.add_pair('{} shape'.format(self.decoder_target_ph.name),  self.decoder_target_ph.get_shape())
+            self.LOG.add_pair('{} shape'.format(self.decoder_input_ph.name),   self.decoder_input_ph.get_shape())
+            self.LOG.add_pair('{} shape'.format(self.encoder_target_ph.name),  self.encoder_target_ph.get_shape())
+            self.LOG.add_pair('{} shape'.format(self.predict_lambda_ph.name),  self.predict_lambda_ph.get_shape())
+            self.LOG.add_pair('{} shape'.format(dummy_decoder_input.name),     dummy_decoder_input.get_shape())
+            # =================
 
             with tf.variable_scope('model'):
 
@@ -231,7 +249,7 @@ class BaseModel:
             
                 # === train ===
                 # encoder
-                self.train_encoder = encoder.Model(self.encoder_ph, reshaped_target_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Encoder', reuse=False)
+                self.train_encoder = encoder.Model(self.encoder_input_ph, reshaped_target_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Encoder', reuse=False)
 
                 encoder_outputs, encoder_state = _build_encoder_state(self.train_encoder)
 
@@ -245,7 +263,7 @@ class BaseModel:
                 #decoder_input = tf.slice(decoder_input_pad, [0, 0], [None, -1])
 
                 # decoder
-                self.train_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input_ph, self.decoder_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Decoder')
+                self.train_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input_ph, self.decoder_target_ph, self.params, mode=tf.estimator.ModeKeys.TRAIN, scope='Decoder')
 
                 # get loss
                 train_encoder_loss = self.train_encoder.loss # Encoder/square_error
@@ -262,12 +280,12 @@ class BaseModel:
                 # === eval ===
                 
                 # encoder
-                self.eval_encoder = encoder.Model(self.encoder_ph, reshaped_target_ph, self.params, mode=tf.estimator.ModeKeys.EVAL, scope='Encoder', reuse=True)
+                self.eval_encoder = encoder.Model(self.encoder_input_ph, reshaped_target_ph, self.params, mode=tf.estimator.ModeKeys.EVAL, scope='Encoder', reuse=True)
                 
                 encoder_outputs, encoder_state = _build_encoder_state(self.eval_encoder)
 
                 # decoder
-                self.eval_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input_ph, self.decoder_ph, self.params,mode=tf.estimator.ModeKeys.EVAL, scope='Decoder')
+                self.eval_decoder = decoder.Model(encoder_outputs, encoder_state, self.decoder_input_ph, self.decoder_target_ph, self.params,mode=tf.estimator.ModeKeys.EVAL, scope='Decoder')
 
                 eval_encoder_loss = self.eval_encoder.loss # Encoder/square_error
                 eval_decoder_loss = self.eval_decoder.loss # Decoder/cross_entropy
@@ -275,7 +293,7 @@ class BaseModel:
                 # === predict ===
 
                 # encoder
-                self.pred_encoder = encoder.Model(self.encoder_ph, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Encoder', reuse=True)
+                self.pred_encoder = encoder.Model(self.encoder_input_ph, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Encoder', reuse=True)
                 
                 # encode old arch
                 encoder_outputs, encoder_state = _build_encoder_state(self.pred_encoder)
@@ -294,6 +312,7 @@ class BaseModel:
                 arch_emb = res['arch_emb']
                 new_arch_emb = res['new_arch_emb']
                 new_arch_outputs = res['new_arch_outputs']
+
 
                 # decode old arch (evaluate)
                 res = tmp_decoder.decode()
@@ -333,6 +352,7 @@ class BaseModel:
                 self.train_summary_op = tf.summary.merge_all(scope=tf.get_variable_scope().name)
 
 
+
             # compute eval loss
             with tf.variable_scope('eval_loss'):
                 encoder_loss = tf.identity(eval_encoder_loss, 'encoder_loss')
@@ -356,17 +376,18 @@ class BaseModel:
                 self.eval_summary_op = tf.summary.merge_all(scope=tf.get_variable_scope().name)
 
 
+
             # global step
             global_step = tf.train.get_or_create_global_step()
             # learning rate
             learning_rate = tf.constant(self.learning_rate)
 
             # optimizer
-            opt = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=1e-5)
+            opt = tf.train.AdamOptimizer(learning_rate=learning_rate)
 
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(update_ops):
-                gradients, variables = zip(*opt.compute_gradients(total_loss))
+                gradients, variables = zip(*opt.compute_gradients(train_total_loss))
                 clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.max_gradient_norm)
 
                 # training operations
@@ -381,9 +402,10 @@ class BaseModel:
                         tf.summary.histogram(var.name, var)
 
 
-            with tf.variable_scope('info'):
-                learning_rate = tf.identity(opt._lr, 'learning_rate')
-                tf.summary.scalar('learning_rate', learning_rate)
+            #with tf.variable_scope('info'):
+            #    learning_rate = opt._lr
+            tf.summary.scalar('learning_rate', learning_rate)
+            tf.summary.scalar('global_step', global_step)
  
             self.global_step = global_step
             self.lr = learning_rate
@@ -412,11 +434,11 @@ class BaseModel:
 
             # prediction op
             self.predict_ops = {
-                    'arch': self.decoder_ph,
-                    'ground_truth_value': self.target_ph, # ground truth score
-                    'predict_value': predict_value,       # predicted score
-                    'sample_id': sample_id,               # old arch (evaluate)
-                    'new_sample_id': new_sample_id        # new arch
+                    'ground_truth_seq': self.decoder_target_ph,
+                    'ground_truth_value': self.encoder_target_ph, # ground truth score
+                    'predict_value': predict_value,               # predicted score
+                    'eval_seq': sample_id,                       # old arch (evaluate)
+                    'predict_seq': new_sample_id                # new arch
                 }
 
             # initialize all variables
@@ -424,7 +446,32 @@ class BaseModel:
 
             # summary op
             self.summary_op = tf.summary.merge_all()
+    
+            # === DEBUG LOG ===
+            self.LOG.switch_group('train')
 
+            self.LOG.add_pair('encoder_loss shape', train_encoder_loss.get_shape())
+            self.LOG.add_pair('decoder_loss shape', train_decoder_loss.get_shape())
+            self.LOG.add_pair('decay_loss shape',   train_decay_loss.get_shape())
+            self.LOG.add_pair('model_loss shape',   train_model_loss.get_shape())
+            self.LOG.add_pair('total_loss shape',   train_total_loss.get_shape())
+
+            self.LOG.switch_group('eval')
+
+            self.LOG.add_pair('encoder_loss shape', eval_encoder_loss.get_shape())
+            self.LOG.add_pair('decoder_loss shape', eval_decoder_loss.get_shape())
+            self.LOG.add_pair('decay_loss shape',   eval_decay_loss.get_shape())
+            self.LOG.add_pair('model_loss shape',   eval_model_loss.get_shape())
+            self.LOG.add_pair('total_loss shape',   eval_total_loss.get_shape())
+
+            self.LOG.switch_group('predict')
+
+            self.LOG.add_pair('ground_truth_seq shape',   self.decoder_target_ph.get_shape())
+            self.LOG.add_pair('ground_truth_value shape', self.encoder_target_ph.get_shape())
+            self.LOG.add_pair('predict_value shape',      predict_value.get_shape())
+            self.LOG.add_pair('eval_seq shape',           sample_id.get_shape())
+            self.LOG.add_pair('predict_seq shape',        new_sample_id.get_shape())
+            # =================
 
         self.LOG.dump_to_log(level=logging.DEBUG)
 
@@ -450,15 +497,15 @@ class BaseModel:
         train_ops = [self.train_ops[name] for name in train_ops_name]
 
         feed_dict = {
-                self.encoder_ph: X,
-                self.decoder_ph: X,
+                self.encoder_input_ph: X,
+                self.decoder_target_ph: X,
                 self.decoder_input_ph: X_feed,
-                self.target_ph: y,
+                self.encoder_target_ph: y,
             }
 
 
         # get ops list
-        ops_name = ['global_step', 'learing_rate'] + train_ops_name
+        ops_name = ['global_step', 'learning_rate'] + train_ops_name
         ops = [self.global_step, self.lr] + train_ops
 
         if writer is not None:
@@ -497,7 +544,6 @@ class BaseModel:
 
             output_dict = dict(zip(ops_name, outputs))
 
-
         return_ops_name = train_ops_name
         return_ops_output = [output_dict[name] for name in return_ops_name]
 
@@ -512,10 +558,10 @@ class BaseModel:
         eval_ops = [self.eval_ops[name] for name in eval_ops_name]
 
         feed_dict = {
-                self.encoder_ph: X,
-                self.decoder_ph: X,
+                self.encoder_input_ph: X,
+                self.decoder_target_ph: X,
                 self.decoder_input_ph: X_feed,
-                self.target_ph: y,
+                self.encoder_target_ph: y,
             }
 
         # get ops list
@@ -564,7 +610,11 @@ class BaseModel:
         
 
         # preprocessing, since 0 is defined as the start of sequence (SOS), each element in X must add 1
-        X_bak, y_bak = self._data_preprocessing(X, y)
+        if self.input_processing:
+            X_bak, y_bak = self._data_preprocessing(X, y)
+        else:
+            X_bak = np.array(X, copy=True, dtype=np.int32)
+            y_bak = np.array(y, copy=True, dtype=np.float32)
 
         # === check ===
         assert X_bak.ndim == 2, ValueError("The dimension of input 'X' must equal to 2")
@@ -711,19 +761,24 @@ class BaseModel:
                         avg_loss[name] /= total_vals_num
 
 
+
+                    # === LOG ===
                     self.LOG.set_header('Epoch {}/{}'.format(epoch, epochs))
                     self.LOG.switch_group()
-                    self.LOG.add_pair('epoch_time', t_epoch_time)
+
+                    fmt = '{key}: {value:.6f}'
+
+                    self.LOG.add_pair('epoch_time', t_epoch_time, fmt=fmt + ' sec')
 
                     # === train info ===
                     self.LOG.switch_group('Train')
 
-                    self.LOG.add_pair('elapsed_time', t_training_time)
-                    self.LOG.add_pair('encoder_loss (mse)', avg_loss['encoder_loss'])
-                    self.LOG.add_pair('decoder_loss  (ce)', avg_loss['decoder_loss'])
-                    self.LOG.add_pair('decay_loss', avg_loss['decay_loss'])
-                    self.LOG.add_pair('model_loss', avg_loss['model_loss'])
-                    self.LOG.add_pair('total_loss', avg_loss['total_loss'])
+                    self.LOG.add_pair('elapsed_time', t_training_time, fmt=fmt + ' sec')
+                    self.LOG.add_pair('encoder_loss (mse)', avg_loss['encoder_loss'], fmt)
+                    self.LOG.add_pair('decoder_loss  (ce)', avg_loss['decoder_loss'], fmt)
+                    self.LOG.add_pair('decay_loss', avg_loss['decay_loss'], fmt)
+                    self.LOG.add_pair('model_loss', avg_loss['model_loss'], fmt)
+                    self.LOG.add_pair('total_loss', avg_loss['total_loss'], fmt)
 
                     if epoch % eval_interval == 0:
 
@@ -749,12 +804,12 @@ class BaseModel:
                         # === eval info ===
                         self.LOG.switch_group('Eval')
 
-                        self.LOG.add_pair('elapsed_time', t_eval_time)
-                        self.LOG.add_pair('encoder_loss (mse)', avg_loss['encoder_loss'])
-                        self.LOG.add_pair('decoder_loss  (ce)', avg_loss['decoder_loss'])
-                        self.LOG.add_pair('decay_loss', avg_loss['decay_loss'])
-                        self.LOG.add_pair('model_loss', avg_loss['model_loss'])
-                        self.LOG.add_pair('total_loss', avg_loss['total_loss'])
+                        self.LOG.add_pair('elapsed_time', t_eval_time, fmt=fmt + ' sec')
+                        self.LOG.add_pair('encoder_loss (mse)', avg_loss['encoder_loss'], fmt)
+                        self.LOG.add_pair('decoder_loss  (ce)', avg_loss['decoder_loss'], fmt)
+                        self.LOG.add_pair('decay_loss', avg_loss['decay_loss'], fmt)
+                        self.LOG.add_pair('model_loss', avg_loss['model_loss'], fmt)
+                        self.LOG.add_pair('total_loss', avg_loss['total_loss'], fmt)
 
 
                     # output to log

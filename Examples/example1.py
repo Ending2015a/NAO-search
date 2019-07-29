@@ -3,6 +3,7 @@ import sys
 import time
 import logging
 
+
 from nao_search import epd
 
 from nao_search.common.logger import LoggingConfig
@@ -19,7 +20,7 @@ LoggingConfig.Use(filename='nao_training.log', output_to_file=True, level='DEBUG
 
 seqs = random_sequences(length=60,
                         seq_num=300,
-                        vocab_size=10)
+                        vocab_size=20)
 
 # === calculate score ===
 
@@ -34,18 +35,16 @@ norm_scores = min_max_normalization(scores)
 
 # create model
 epd_model = epd.BaseModel(source_length=60,
-                          encoder_vocab_size=10,
-                          decoder_vocab_size=10,
+                          encoder_vocab_size=20,
+                          decoder_vocab_size=20,
                           num_cpu=1,
                           tensorboard_log='epd_log',
-                          full_tensorboard_log=True)
-
-
+                          full_tensorboard_log=False)
 
 epd_model.learn(X=seqs,
                 y=norm_scores,
                 log_interval=1,
-                tb_log_name='epd_seq_search')
+                tb_log_name='rndseq_search')
 
 
 epd_model.save('epd_seq_search.model')
