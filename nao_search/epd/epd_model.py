@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import logging
+import multiprocessing
 
 import cloudpickle
 
@@ -88,7 +89,7 @@ class BaseModel:
         :param num_cpu:
         :param tensorboard_log: (str) log path
         :param full_tensorboard_log: (bool)
-        :param input_processing: (bool) automatically preprocess/postprocess input
+        :param input_processing: (bool) automatically preprocess/postprocess input. Set this param to True will automatically convert your input sequences from 0-based to 1-based (since 0 = <SOS>), also your scores will be reversed, since the native Neural Architecture Search is using error rates as their scores of the sequences.
         '''
     
 
@@ -316,7 +317,7 @@ class BaseModel:
 
                 # decode old arch (evaluate)
                 res = tmp_decoder.decode()
-                sample_id = res['sample_id']
+                sample_id = tf.reshape(res['sample_id'], shape=(-1, self.decoder_length))
 
                 encoder_state = new_arch_emb
                 encoder_state.set_shape([None, self.decoder_hidden_size])
@@ -326,7 +327,7 @@ class BaseModel:
                 # decode new arch
                 self.pred_decoder = decoder.Model(new_arch_outputs, encoder_state, dummy_decoder_input, None, self.params, mode=tf.estimator.ModeKeys.PREDICT, scope='Decoder')
                 res = self.pred_decoder.decode()
-                new_sample_id = res['sample_id']
+                new_sample_id = tf.reshape(res['sample_id'], shape=(-1, self.decoder_length))
 
 
             # compute training loss
@@ -439,8 +440,8 @@ class BaseModel:
                     'ground_truth_seq': self.decoder_target_ph,
                     'ground_truth_value': self.encoder_target_ph, # ground truth score
                     'predict_value': predict_value,               # predicted score
-                    'eval_seq': sample_id,                       # old arch (evaluate)
-                    'predict_seq': new_sample_id                # new arch
+                    'predict_old_seq': sample_id,                 # old arch (evaluate)
+                    'predict_new_seq': new_sample_id              # new arch
                 }
 
             # initialize all variables
@@ -471,26 +472,52 @@ class BaseModel:
             self.LOG.add_pair('ground_truth_seq shape',   self.decoder_target_ph.get_shape())
             self.LOG.add_pair('ground_truth_value shape', self.encoder_target_ph.get_shape())
             self.LOG.add_pair('predict_value shape',      predict_value.get_shape())
-            self.LOG.add_pair('eval_seq shape',           sample_id.get_shape())
-            self.LOG.add_pair('predict_seq shape',        new_sample_id.get_shape())
+            self.LOG.add_pair('predict_old_seq shape',    sample_id.get_shape())
+            self.LOG.add_pair('predict_new_seq shape',    new_sample_id.get_shape())
             # =================
 
         self.LOG.dump_to_log(level=logging.DEBUG)
 
 
-    def _data_preprocessing(self, X, y):
-        X_ = np.array(X, copy=True, dtype=np.int32)
-        y_ = np.array(y, copy=True, dtype=np.float32)
+    def _data_preprocessing(self, X=None, y=None):
 
-        X_ = X_ + 1
+        # processing
+        if X:
+            X_ = np.array(X, copy=True, dtype=np.int32)
+            X_ = X_ + 1
 
-        return X_, y_
+        if y:    
+            y_ = np.array(y, copy=True, dtype=np.float32)
+            y_ = 1. - y_
 
-    def _data_postprocessing(self, X, y):
-        X_ = X - 1
-        y_ = y
+        # return
+        if X and y:
+            return X_, y_
+        elif X:
+            return X_
+        elif y:
+            return y_
 
-        return X_, y_
+        return
+
+    def _data_postprocessing(self, X=None, y=None):
+        
+        # processing
+        if X:
+            X_ = X - 1
+
+        if y:
+            y_ = 1. - y
+
+        # return
+        if X and y:
+            return X_, y_
+        elif X:
+            return X_
+        elif y:
+            return y_
+
+        return 
 
 
     def _train_step(self, X, y, X_feed, writer, epoch):
@@ -554,7 +581,7 @@ class BaseModel:
 
 
 
-    def _eval_step(self, X, y, X_feed, writer, epoch):
+    def _eval_step(self, X, y, X_feed, writer=None, epoch=None):
         
         eval_ops_name = list(self.eval_ops.keys())
         eval_ops = [self.eval_ops[name] for name in eval_ops_name]
@@ -599,20 +626,68 @@ class BaseModel:
         return dict(zip(return_ops_name, return_ops_output))
 
 
+    def _predict_step(self, X, ld, y=None):
+        
+        pred_ops_name = list(self.predict_ops.keys())
+        pred_ops = [self.pred_ops_name[name] for name in pred_ops_name]
+
+        feed_dict = {
+                self.encoder_input_ph: X,
+                self.encoder_target_ph: y
+            }
+
+        # if no ground truth provided
+        if not y:
+            if 'ground_truth_value' in pred_ops_name:
+                pred_ops_name.remove('ground_truth_value')
+            
+            del feed_dict[self.encoder_target_ph]
+
+        # get ops list
+        ops_name = pred_ops_name
+        ops = pred_ops
+
+
+        # predict step
+        outputs = self.sess.run(
+                ops,
+                feed_dict)
+
+        output_dict = dict(zip(ops_name, outputs))
+
+
+        return_ops_name = pred_ops_name
+        return_ops_output = [output_dict[name] for name in return_ops_name]
+
+
+        return dict(zip(return_ops_name, return_ops_output))
+
     def learn(self, 
               X, 
               y, 
               epochs:               int = 1000,
-              callback                  = None, 
+              callback                  = None,
               eval_interval:        int = 50,
               log_interval:         int = 1, 
-              tb_log_name:          str = "epd", 
+              tb_log_name:          str = "epd",
+              input_processing          = None,
               reset_num_timesteps: bool = True):
 
+        '''
+        :param X: sequences, (1-based), since 0 = <SOS>, if your sequences are 0-based, your should set input_processing to True to automatically convert your sequences to 1-based.
+        :param y: scores, (error rate), if your scores do not representing the error rates of the sequences, you should set input_processing to True to automatically reverse your scores.
+        :param epochs: (int) training epochs
+        :param callback: callback function, signature: callback(local, global)
+        :param eval_interval: (int) do evaluation every n epochs
+        :param log_interval: (int) log every n epochs
+        :param input_processing: (bool) this will overwrite default input_processing setting
+        :param reset_num_timesteps: (bool) reset global_step
+        '''
         
+        input_processing = input_processing if not input_processing is None else self.input_processing
 
         # preprocessing, since 0 is defined as the start of sequence (SOS), each element in X must add 1
-        if self.input_processing:
+        if input_processing:
             X_bak, y_bak = self._data_preprocessing(X, y)
         else:
             X_bak = np.array(X, copy=True, dtype=np.int32)
@@ -675,28 +750,33 @@ class BaseModel:
             # === DEBUG LOG ===
             self.LOG.set_header('DEBUG LOG: Learn')
             self.LOG.switch_group('Training info')
-            self.LOG.add_pair('batch_size', self.batch_size)
+            self.LOG.add_pair('input_processing',         input_processing)
+            self.LOG.add_pair('batch_size',               self.batch_size)
+            self.LOG.add_pair('eval_interval',            eval_interval)
             self.LOG.add_pair('training steps per epoch', n_updates)
-            self.LOG.add_pair('eval steps per epoch', n_eval)
+            self.LOG.add_pair('eval steps per epoch',     n_eval)
+
+            self.LOG.switch_group('Log info')
+            self.LOG.add_pair('log_interval',         log_interval)
+            self.LOG.add_pair('tensorboard logdir',   self.tensorboard_log)
+            self.LOG.add_pair('tensorboard log name', tb_log_name)
 
             self.LOG.switch_group('Dataset')
             self.LOG.add_pair('training samples', train_num)
-            self.LOG.add_pair('eval samples', eval_num)
+            self.LOG.add_pair('eval samples',     eval_num)
 
             self.LOG.switch_group('Dataset shape')
-            self.LOG.add_pair('train X', X_train.shape)
-            self.LOG.add_pair('train y', y_train.shape)
+            self.LOG.add_pair('train X',      X_train.shape)
+            self.LOG.add_pair('train y',      y_train.shape)
             self.LOG.add_pair('train X_feed', X_train_feed.shape)
-            self.LOG.add_pair('eval X', X_eval.shape)
-            self.LOG.add_pair('eval y', y_eval.shape)
-            self.LOG.add_pair('eval X_feed', X_eval_feed.shape)
+            self.LOG.add_pair('eval X',       X_eval.shape)
+            self.LOG.add_pair('eval y',       y_eval.shape)
+            self.LOG.add_pair('eval X_feed',  X_eval_feed.shape)
 
             self.LOG.dump_to_log(level=logging.DEBUG)
             # =================
 
 
-
-            t_first_start = time.time()
 
             for epoch in range(1, epochs+1):
 
@@ -732,8 +812,8 @@ class BaseModel:
 
                     # train step
                     epoch_train_loss_vals.append(
-                            self._train_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1)
-                            )                
+                            [self._train_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1), end_ind - start_ind]
+                            )
 
                 t_end = time.time()
 
@@ -759,7 +839,7 @@ class BaseModel:
 
                         # eval step
                         epoch_eval_loss_vals.append(
-                                self._eval_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1)
+                                [self._eval_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1), end_ind - start_ind]
                                 )
                     
                     t_eval_end = time.time()
@@ -787,13 +867,13 @@ class BaseModel:
                         }
 
                     # sum
-                    for d in epoch_train_loss_vals:
+                    for d, batch_sz in epoch_train_loss_vals:
                         for name in avg_loss.keys():
-                            avg_loss[name] += d[name]
+                            avg_loss[name] += d[name] * batch_sz
 
                     # average
                     for name in avg_loss.keys():
-                        avg_loss[name] = avg_loss[name] / train_num * self.batch_size
+                        avg_loss[name] = avg_loss[name] / train_num
 
 
 
@@ -827,13 +907,13 @@ class BaseModel:
                             }
 
                         # sum
-                        for d in epoch_eval_loss_vals:
+                        for d, batch_sz in epoch_eval_loss_vals:
                             for name in avg_loss.keys():
-                                avg_loss[name] += d[name]
+                                avg_loss[name] += d[name] * batch_sz
 
                         # average
                         for name in avg_loss.keys():
-                            avg_loss[name]  = avg_loss[name] / eval_num * self.batch_size
+                            avg_loss[name]  = avg_loss[name] / eval_num
 
                         # === eval info ===
                         self.LOG.switch_group('Eval')
@@ -856,33 +936,240 @@ class BaseModel:
 
 
 
-    def predict(self, seeds, lambdas=[10, 20, 30]):
-        
+
+    def eval(self, X, 
+                   y,
+                   input_processing=None):
+
+        input_processing = input_processing if not input_processing is None else self.input_processing
+
+        if input_processing:
+            X_bak, t_bak = self._data_preprocessing(X, y)
+        else:
+            X_bak = np.array(X, copy=True, dtype=np.int32)
+            y_bak = np.array(y, copy=True, dtype=np.float32)
+
+
         # === check ===
-        assert seeds.ndim == 2, ValueError("The dimension of input 'seeds' must be 2")
-        assert seeds.shape[-1], ValueError("The last dimension of input 'seeds' must match to source_length")
+        assert X_bak.ndim == 2, ValueError("The dimension of input 'X' must equal to 2")
+        assert X_bak.shape[-1] == self.source_length, ValueError("The last dimension of input 'X' must match to 'source_length'")
+        assert np.all( (X_bak >= 0) & (X_bak <= self.encoder_vocab_size) ), ValueError("Each element of input 'X' must be in the range of the vocab size")
+        assert np.all( (y_bak >= 0.0) & (y_bak <= 1.0) ), ValueError("Each element of input 'y' must be normalized between 0 ~ 1")
+        assert len(X_bak) == len(y_bak), ValueError("The size of input 'X' and 'y' must be equal")
         # =============
 
-        # === preprocess lambda ===
+        num_items = len(y_bak)
+        eval_num = num_items
+
+        n_eval = eval_num // self.batch_size
+        
+        if eval_num % self.batch_size > 0:
+            n_eval += 1
+
+        # === DEBUG LOG ===
+        self.LOG.set_header('DEBUG LOG: Eval')
+        self.LOG.switch_group('Eval info')
+        self.LOG.add_pair('batch_size', self.batch_size)
+        self.LOG.add_pair('eval steps per epoch')
+        # =================
+
+        t_eval_start = time.time()
+
+        for update in range(1, n_eval+1):
+
+            start_ind = (update-1) * self.batch_size
+            end_ind = start_ind + self.batch_size
+
+            # clamp
+            end_ind = end_ind if end_ind <= eval_num else eval_num
+
+            # get slice
+            X_slice = X_eval[start_ind:end_ind]
+            y_slice = y_eval[start_ind:end_ind]
+            X_feed_slice = X_eval_feed[start_ind:end_ind]
+
+            # eval step
+            eval_loss_vals.append(
+                    [self._eval_step(X_slice, y_slice, X_feed_slice), end_ind - start_ind]
+                    )
+
+        t_eval_end = time.time()
+        t_eval_time = t_eval_end - t_eval_start
+
+        avg_loss = {
+                'encoder_loss': 0.0,
+                'decoder_loss': 0.0,
+                'decay_loss': 0.0,
+                'model_loss': 0.0,
+                'total_loss': 0.0
+            }
+
+        # sum & average
+        for d, batch_sz in eval_loss_vals:
+            for name in avg_loss.keys():
+                avg_loss[name] += d[name] * (batch_sz / eval_num)  # alleviate numerical error
+
+        
+        # === eval info ===
+        fmt = '{key}: {value:.6f}'
+        self.LOG.set_header('Eval results')
+
+        self.LOG.add_pair('elapsed_time', t_eval_time, fmt=fmt + 'sec')
+        self.LOG.add_pair('encoder_loss (mse)', avg_loss['encoder_loss'], fmt)
+        self.LOG.add_pair('decoder_loss  (ce)', avg_loss['decoder_loss'], fmt)
+        self.LOG.add_pair('decay_loss', avg_loss['decay_loss'], fmt)
+        self.LOG.add_pair('model_loss', avg_loss['model_loss'], fmt)
+        self.LOG.add_pair('total_loss', avg_loss['total_loss'], fmt)
+
+        self.LOG.dump_to_log()
+
+
+
+    def predict(self, seeds, 
+                      lambdas=[10, 20, 30],
+                      input_processing=None):
+ 
+
+        input_processing = input_processing if not input_processing is None else self.input_processing
+
+        # === preprocess ===
         if not isinstance(lambdas, list):
             lambdas = list(lambdas)
 
-        lambdas = np.array(lambdas, dtype=np.float32)
+        lambdas = np.array(lambdas, dtype=np.float32).flatten()
+        
+        if input_processing:
+            seeds_bak = self._data_preprocessing(X=seeds)
+        else:
+            seeds_bak = np.array(seeds, copy=True, dtype=np.int32)
         # =========================
+
+
+        # === check ===
+        assert seeds_bak.ndim == 2, ValueError("The dimension of input 'seeds' must be 2")
+        assert seeds_bak.shape[-1], ValueError("The last dimension of input 'seeds' must match to source_length")
+        assert seeds_bak.shape[-1] == self.source_length, ValueError("The last dimension of input 'X' must match to 'source_length'")
+        assert np.all( (seeds_bak >= 0) & (seeds_bak <= self.encoder_vocab_size) ), ValueError("Each element of input 'X' must be in the range of the vocab size")
+        # =============
+
+
+        # calculate the total number of items
+        num_items = len(seeds_bak)
+        pred_num = num_items
+
+
+        # predicting steps of for each epoch
+        n_pred = pred_num // self.batch_size
+
+        if pred_num % self.batch_size > 0:
+            n_pred += 1
 
         # === DEBUG LOG ===
         self.LOG.set_header('DEBUG LOG: Predict')
-        self.LOG.add_pair('lambdas', lambdas)
-        self.LOG.add_pair('seeds num', len(seeds))
+        self.LOG.switch_group('Predicting info')
+        self.LOG.add_pair('batch_size', self.batch_size)
+        self.LOG.add_pair('total pred steps', n_pred)
+        self.LOG.add_pair('lambdas', lambdas.tolist())
+        self.LOG.add_pair('seeds num', len(seeds_bak))
+        self.LOG.add_pair('expected results num', len(seeds_bak) * len(lambdas))
         self.LOG.dump_to_log(level=logging.DEBUG)
         # =================
 
+        # === some containers ===
+        results_vals = []
+
+        t_start = time.time()
+
+        for _lambda in lambdas.tolist():
+
+
+            for pred in range(1, n_pred+1):
+
+                start_ind = (pred-1) * self.batch_size
+                end_ind = start_ind + self.batch_size
+
+                # clamp
+                end_ind = end_ind if end_ind <= pred_num else pred_num
+
+                # get slice
+                seeds_slice = seeds_bak[start_ind:end_ind]
+
+                results_vals.append(
+                        self._predict_step(seeds_slice, _lambda)
+                        )
+
+        t_end = time.time()
+
+
+        result_list = {
+                'ground_truth_seq': [],
+                'predict_value': [],
+                'predict_old_seq': [],
+                'predict_new_seq': []
+                }
+
+        # for each batch
+        for results_batch in results_vals:
+
+            # for each item
+            for result in results_batch:
+                
+                ground_truth_seq = result['ground_truth_seq'].flatten()
+                predict_old_seq = result['predict_old_seq'].flatten()
+                predict_new_seq = result['predict_new_seq'].flatten()
+                predict_value = np.asscalar(result['predict_value'])
+
+                
+                if input_processing:
+                    ground_truth_seq = self._data_postprocessing(X=ground_truth_seq)
+                    predict_old_seq  = self._data_postprocessing(X=predict_old_seq)
+                    predict_new_seq  = self._data_postprocessing(X=predict_new_seq)
+                    predict_value    = self._data_postprocessing(y=predict_value)
+
+                result_list['ground_truth_seq'].append(ground_truth_seq)
+                result_list['predict_old_seq'].append(predict_old_seq)
+                result_list['predict_new_seq'].append(predict_new_seq)
+                result_list['predict_value'].append(predict_value)
+
+
+
+        _info = {
+                'ground_truth_seq': result_list['ground_truth_seq'],
+                'predict_old_seq': result_list['predict_old_seq'],
+                'predict_value': result_list['predict_value']
+                }
+
+        return result_list['predict_new_seq'], _info
+
+
+    
+    def predict_scores(self, seeds,
+                            input_processing=None):
+
+        _, _info = self.predict(seeds,
+                                lambdas=[0.],
+                                input_processing=input_processing)
+
+        return _info['predict_value']
+
+
 
     @classmethod
-    def load(cls, load_path):
+    def load(cls, load_path,
+                  num_cpu:               int = 0,
+                  tensorboard_log:       str = None,
+                  full_tensorboard_log: bool = False,
+                  input_processing:     bool = True):
+
         data, params = cls._load_model(load_path)
         
-        model = cls(_init_setup_model=False)
+        model = cls(
+                num_cpu=num_cpu,
+                tensorboard_log=tensorboard_log,
+                full_tensorboard_log=full_tensorboard_log,
+                input_processing=input_processing,
+                _init_setup_model=False)
+
         model.__dict__.update(data)
         model._setup_model()
         
@@ -1030,4 +1317,10 @@ class BaseModel:
         # ===========
 
         return return_dictionary
+
+    def __del__(self):
+        
+        tf.reset_default_graph()
+
+        self.sess.close()
 
