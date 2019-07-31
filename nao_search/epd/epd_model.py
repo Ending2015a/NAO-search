@@ -19,6 +19,7 @@ from . import tf_util
 from .tf_util import TensorboardWriter
 
 from nao_search.common.logger import Logger
+from nao_search.common.utils import pairwise_accuracy
 
 class BaseModel:
     def __init__(self,
@@ -638,7 +639,7 @@ class BaseModel:
         pred_ops_name = list(self.predict_ops.keys())
 
         # if ground truth value provided
-        if y:
+        if y is not None:
             feed_dict[self.encoder_target_ph] = y
         else:
             if 'ground_truth_value' in pred_ops_name:
@@ -841,7 +842,9 @@ class BaseModel:
 
                         # eval step
                         epoch_eval_loss_vals.append(
-                                [self._eval_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1), end_ind - start_ind]
+                                    [self._eval_step(X_slice, y_slice, X_feed_slice, writer=writer, epoch=epoch-1), 
+                                        end_ind - start_ind,
+                                        self._predict_step(X_slice, ld=1., y=y_slice)]
                                 )
                     
                     t_eval_end = time.time()
@@ -908,14 +911,31 @@ class BaseModel:
                                 'total_loss': 0.0
                             }
 
+                        ground_truth_value = []
+                        predict_value = []
+
                         # sum
-                        for d, batch_sz in epoch_eval_loss_vals:
+                        for d, batch_sz, _ in epoch_eval_loss_vals:
                             for name in avg_loss.keys():
                                 avg_loss[name] += d[name] * batch_sz
 
                         # average
                         for name in avg_loss.keys():
                             avg_loss[name]  = avg_loss[name] / eval_num
+
+                        # accuracy
+                        for _, _, pred in epoch_eval_loss_vals:
+                            # flattening to 1D list
+                            ground_truth_value.extend(pred['ground_truth_value'].flatten().tolist())
+                            predict_value.extend(pred['predict_value'].flatten().tolist())
+
+                        # converting list to np.array
+                        ground_truth_value = np.array(ground_truth_value)
+                        predict_value = np.array(predict_value)
+
+                        # calculate pairwise accuracy
+                        mse = ((predict_value - ground_truth_value)**2).mean(axis=0)
+                        pairwise_acc = pairwise_accuracy(ground_truth_value, predict_value)
 
                         # === eval info ===
                         self.LOG.switch_group('Eval')
@@ -926,6 +946,10 @@ class BaseModel:
                         self.LOG.add_pair('decay_loss', avg_loss['decay_loss'], fmt)
                         self.LOG.add_pair('model_loss', avg_loss['model_loss'], fmt)
                         self.LOG.add_pair('total_loss', avg_loss['total_loss'], fmt)
+
+                        self.LOG.switch_group('Predict')
+                        self.LOG.add_pair('pairwise_accuracy ', pairwise_acc, fmt)
+                        self.LOG.add_pair('value_loss   (mse)', mse, fmt)
 
 
                     # output to log
