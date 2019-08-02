@@ -881,7 +881,7 @@ class BaseModel:
                         avg_loss[name] = avg_loss[name] / train_num
 
                     # get timestep
-                    last_timestep = epoch_train_loss_vals[-1]['global_step']
+                    last_timestep = epoch_train_loss_vals[-1][0]['global_step']
 
 
                     # === LOG ===
