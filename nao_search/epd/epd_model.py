@@ -574,7 +574,7 @@ class BaseModel:
 
             output_dict = dict(zip(ops_name, outputs))
 
-        return_ops_name = train_ops_name
+        return_ops_name = ops_name
         return_ops_output = [output_dict[name] for name in return_ops_name]
 
 
@@ -880,6 +880,8 @@ class BaseModel:
                     for name in avg_loss.keys():
                         avg_loss[name] = avg_loss[name] / train_num
 
+                    # get timestep
+                    last_timestep = epoch_train_loss_vals[-1]['global_step']
 
 
                     # === LOG ===
@@ -888,6 +890,7 @@ class BaseModel:
 
                     fmt = '{key}: {value:.6f}'
 
+                    self.LOG.add_pair('total_timestep', last_timestep)
                     self.LOG.add_pair('epoch_time', t_epoch_time, fmt=fmt + ' sec')
 
                     # === train info ===
