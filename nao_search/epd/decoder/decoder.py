@@ -127,10 +127,10 @@ class MyDense(tf.layers.Dense):
     
         if time is not None: #predicting
             outputs = tf.nn.softmax(outputs)
-            outputs = tf.cond(
-                tf.equal(tf.mod(time, self.branch_length), tf.constant(0)),
-                lambda : _index(outputs),
-                lambda : _op(outputs))
+            #outputs = tf.cond(
+            #    tf.equal(tf.mod(time, self.branch_length), tf.constant(0)),
+            #    lambda : _index(outputs),
+            #    lambda : _op(outputs))
         return outputs
 
 
