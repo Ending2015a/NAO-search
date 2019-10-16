@@ -1240,7 +1240,7 @@ class BaseModel:
                     [self.global_step.assign(0)]
                     )
 
-        return self.sess.run( [self.global_step] ) == 0
+        return self.sess.run( [self.global_step] ) == [0]
 
 
     @staticmethod
